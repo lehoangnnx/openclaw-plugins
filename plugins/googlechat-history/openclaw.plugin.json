@@ -1,0 +1,26 @@
+{
+  "id": "googlechat-history",
+  "name": "Google Chat History",
+  "description": "Read past messages from a Google Chat space via the Chat API.",
+  "contracts": {
+    "tools": ["googlechat_history"]
+  },
+  "toolMetadata": {
+    "googlechat_history": {
+      "optional": true
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "serviceAccountFile": {
+        "type": "string",
+        "description": "Path to the Google service account JSON key. Falls back to env GOOGLE_CHAT_SERVICE_ACCOUNT_FILE or inline GOOGLE_CHAT_SERVICE_ACCOUNT."
+      }
+    }
+  }
+}

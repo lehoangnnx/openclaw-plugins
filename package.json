@@ -1,0 +1,19 @@
+{
+  "name": "openclaw-plugins",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Community plugins and skills for OpenClaw.",
+  "license": "MIT",
+  "author": "Nguyen Le Hoang",
+  "type": "module",
+  "workspaces": [
+    "plugins/*"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
