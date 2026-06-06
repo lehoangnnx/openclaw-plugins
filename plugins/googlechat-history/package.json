@@ -1,7 +1,7 @@
 {
   "name": "@lehoangnnx/openclaw-googlechat-history",
-  "version": "0.1.0",
-  "description": "OpenClaw tool plugin to read Google Chat space message history via the Chat API (spaces.messages.list).",
+  "version": "0.3.0",
+  "description": "OpenClaw tool plugin to read allowlisted Google Chat spaces (history, members, metadata) via the Chat API — app or user auth, deny-by-default allowlist, optional auto-context.",
   "keywords": [
     "openclaw",
     "openclaw-plugin",

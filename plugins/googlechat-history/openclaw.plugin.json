@@ -1,12 +1,18 @@
 {
   "id": "googlechat-history",
   "name": "Google Chat History",
-  "description": "Read past messages from a Google Chat space via the Chat API.",
+  "description": "Read history, members, and metadata from allowlisted Google Chat spaces via the Chat API.",
   "contracts": {
-    "tools": ["googlechat_history"]
+    "tools": ["googlechat_history", "googlechat_members", "googlechat_space_info"]
   },
   "toolMetadata": {
     "googlechat_history": {
+      "optional": true
+    },
+    "googlechat_members": {
+      "optional": true
+    },
+    "googlechat_space_info": {
       "optional": true
     }
   },
@@ -17,9 +23,46 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "authMode": {
+        "type": "string",
+        "enum": ["app", "user"],
+        "description": "How to read messages. 'app' = service account (needs admin-approved scope). 'user' = OAuth as a human (no admin approval; token sees all your spaces, so allowedSpaces is enforced). Default 'app'."
+      },
       "serviceAccountFile": {
         "type": "string",
-        "description": "Path to the Google service account JSON key. Falls back to env GOOGLE_CHAT_SERVICE_ACCOUNT_FILE or inline GOOGLE_CHAT_SERVICE_ACCOUNT."
+        "description": "Path to the Google service account JSON key. Used by app-mode reads and by googlechat_members / googlechat_space_info (chat.bot). Falls back to env GOOGLE_CHAT_SERVICE_ACCOUNT_FILE or inline GOOGLE_CHAT_SERVICE_ACCOUNT."
+      },
+      "user": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OAuth user-auth credentials for message reads (authMode 'user'). Each falls back to env GOOGLE_CHAT_OAUTH_CLIENT_ID / _SECRET / _REFRESH_TOKEN. Prefer secrets/env over inline config.",
+        "properties": {
+          "clientId": { "type": "string" },
+          "clientSecret": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        }
+      },
+      "allowedSpaces": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Allowlist of readable space ids (e.g. 'spaces/AAQAxxxx'). DENY-BY-DEFAULT: if empty/unset, every tool refuses and auto-context never fires. This bounds what the agent can read; it does not reduce the token's own scope."
+      },
+      "autoContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Auto-inject recent space history before replies. Only fires for allowlisted spaces. Requires the host to allow prompt injection + conversation access for this plugin (see README).",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable auto-context injection (default false)."
+          },
+          "messageCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many recent messages to inject (default 15, max 50)."
+          }
+        }
       }
     }
   }
