@@ -27,9 +27,24 @@ type PluginConfig = {
   serviceAccountFile?: string;
   /** User-auth OAuth credentials for message reads (env fallback: GOOGLE_CHAT_OAUTH_*). */
   user?: { clientId?: string; clientSecret?: string; refreshToken?: string };
-  /** Allowlist of readable spaces. Deny-by-default: empty/unset => nothing is readable. */
+  /**
+   * Explicit allowlist of readable spaces. When set, it wins (and an empty array
+   * denies everything). When UNSET, the allowlist is INHERITED from the
+   * googlechat channel — the enabled `channels.googlechat.groups` spaces while
+   * `groupPolicy: "allowlist"` — so this plugin reads exactly the spaces the
+   * channel already admits, with no second list to maintain.
+   */
   allowedSpaces?: string[];
   autoContext?: { enabled?: boolean; messageCount?: number };
+};
+
+// Structural read of the googlechat channel's space allowlist. We mirror it
+// instead of importing the channel package: the channel owns this contract, we
+// only observe its resolved config. Mutable/wildcard keys are intentionally not
+// expanded — only stable `spaces/<id>` entries inherit (fail-closed).
+type GoogleChatChannelConfig = {
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groups?: Record<string, { enabled?: boolean } | null | undefined>;
 };
 
 // Structural subset of the trusted tool context we read. Declaring only the
@@ -40,17 +55,34 @@ type ToolContext = {
   deliveryContext?: { channel?: string; to?: string };
 };
 
-// Resolve the live plugin config on each call so operators can change auth /
-// allowlist / auto-context settings without restarting the gateway.
-function resolvePluginConfig(api: OpenClawPluginApi): PluginConfig {
+// One live config snapshot per call, so operators can change auth / allowlist /
+// auto-context (and the inherited googlechat allowlist) without a gateway
+// restart, and so the plugin block and the channel block read the same snapshot.
+function resolveLive(api: OpenClawPluginApi): { cfg: PluginConfig; config: OpenClawConfig | undefined } {
+  const config = api.runtime.config?.current
+    ? (api.runtime.config.current() as OpenClawConfig)
+    : undefined;
   const cfg = resolveLivePluginConfigObject(
-    api.runtime.config?.current
-      ? () => api.runtime.config.current() as OpenClawConfig
-      : undefined,
+    config ? () => config : undefined,
     PLUGIN_ID,
     api.pluginConfig as Record<string, unknown>,
   ) as PluginConfig | undefined;
-  return cfg ?? {};
+  return { cfg: cfg ?? {}, config };
+}
+
+// Spaces the googlechat channel already admits: enabled allowlist groups keyed
+// by a stable `spaces/<id>`. Returns empty unless groupPolicy is "allowlist"
+// (an "open"/"disabled" channel yields no finite list, so history denies all
+// rather than reading every space the credential can reach).
+function inheritedAllowedSpaces(config: OpenClawConfig | undefined): string[] {
+  const channels = config?.channels as Record<string, unknown> | undefined;
+  const gc = channels?.[GOOGLECHAT_CHANNEL] as GoogleChatChannelConfig | undefined;
+  if (!gc || gc.groupPolicy !== "allowlist" || !gc.groups) {
+    return [];
+  }
+  return Object.entries(gc.groups)
+    .filter(([key, entry]) => /^spaces\//i.test(key.trim()) && entry?.enabled !== false)
+    .map(([key]) => normalizeSpace(key));
 }
 
 /** Pull a "spaces/<id>" out of any string that contains one. */
@@ -88,9 +120,12 @@ function resolveSpaceArg(explicit: string | undefined, ctx: ToolContext): string
 const NO_SPACE_TEXT =
   "No Google Chat space id available. Pass `space` (e.g. spaces/AAQAxxxx) or run inside a Google Chat space conversation.";
 
-// Deny-by-default allowlist: a space is readable only if it is explicitly listed.
-function allowedSpaceSet(cfg: PluginConfig): Set<string> {
-  return new Set((cfg.allowedSpaces ?? []).map((s) => normalizeSpace(s)));
+// Deny-by-default allowlist: explicit `allowedSpaces` wins (empty array => deny
+// all); otherwise inherit the googlechat channel allowlist so there is one
+// source of truth for which spaces are readable.
+function allowedSpaceSet(cfg: PluginConfig, config: OpenClawConfig | undefined): Set<string> {
+  const list = cfg.allowedSpaces ?? inheritedAllowedSpaces(config);
+  return new Set(list.map((s) => normalizeSpace(s)));
 }
 
 type SpaceCheck = { space: string } | { error: string };
@@ -107,13 +142,14 @@ function checkSpace(
   if (allowed.size === 0) {
     return {
       error:
-        "No spaces are allowed (deny-by-default). Configure " +
-        "plugins.entries.googlechat-history.config.allowedSpaces with the space ids you permit.",
+        "No spaces are readable (deny-by-default). Either add the space to the googlechat " +
+        "channel allowlist (channels.googlechat.groups with groupPolicy: \"allowlist\"), or set " +
+        "plugins.entries.googlechat-history.config.allowedSpaces explicitly.",
     };
   }
   if (!allowed.has(space)) {
     return {
-      error: `Refusing to read ${space}: it is not in the allowedSpaces allowlist.`,
+      error: `Refusing to read ${space}: it is not allowlisted (not in the googlechat channel allowlist nor allowedSpaces).`,
     };
   }
   return { space };
@@ -250,8 +286,8 @@ export default definePluginEntry({
         parameters: HistorySchema,
         execute: async (_toolCallId, rawParams) => {
           const params = rawParams as HistoryParams;
-          const cfg = resolvePluginConfig(api);
-          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg));
+          const { cfg, config } = resolveLive(api);
+          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg, config));
           if ("error" in checked) {
             return errorResult(checked.error, "space_denied");
           }
@@ -289,8 +325,8 @@ export default definePluginEntry({
         parameters: MembersSchema,
         execute: async (_toolCallId, rawParams) => {
           const params = rawParams as MembersParams;
-          const cfg = resolvePluginConfig(api);
-          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg));
+          const { cfg, config } = resolveLive(api);
+          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg, config));
           if ("error" in checked) {
             return errorResult(checked.error, "space_denied");
           }
@@ -328,8 +364,8 @@ export default definePluginEntry({
         parameters: SpaceInfoSchema,
         execute: async (_toolCallId, rawParams) => {
           const params = rawParams as SpaceInfoParams;
-          const cfg = resolvePluginConfig(api);
-          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg));
+          const { cfg, config } = resolveLive(api);
+          const checked = checkSpace(params.space, ctx, allowedSpaceSet(cfg, config));
           if ("error" in checked) {
             return errorResult(checked.error, "space_denied");
           }
@@ -358,11 +394,11 @@ export default definePluginEntry({
     // allow prompt injection + conversation access for this non-bundled plugin
     // (see README). Fail-safe: never blocks or breaks a turn.
     api.on("before_prompt_build", async (_event, ctx) => {
-      const cfg = resolvePluginConfig(api);
+      const { cfg, config } = resolveLive(api);
       if (!cfg.autoContext?.enabled) {
         return;
       }
-      const allowed = allowedSpaceSet(cfg);
+      const allowed = allowedSpaceSet(cfg, config);
       if (allowed.size === 0) {
         return;
       }

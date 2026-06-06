@@ -23,10 +23,24 @@ Plus an optional **auto-context** hook that injects recent history before replie
 
 ## Security model — read this
 
-- **Allowlist limits the AGENT, not the credential.** `allowedSpaces` (deny-by-
-  default) means the agent/AI can only read spaces you explicitly list — but the
-  underlying OAuth/service-account credential is **not** narrowed per-space
-  (Google has no per-space scope). Treat tokens as secrets.
+- **Allowlist limits the AGENT, not the credential.** The agent/AI can only read
+  allowlisted spaces — but the underlying OAuth/service-account credential is
+  **not** narrowed per-space (Google has no per-space scope). Treat tokens as
+  secrets.
+- **The allowlist is inherited from the `googlechat` channel by default.** Leave
+  `allowedSpaces` unset and this plugin reads exactly the spaces the channel
+  admits: the enabled `channels.googlechat.groups` entries while
+  `groupPolicy: "allowlist"`. One source of truth — add a space to the channel
+  and history follows; no second list to keep in sync. Set `allowedSpaces`
+  explicitly only to override (an empty array denies everything).
+- **Fail-closed.** If the channel is `groupPolicy: "open"`/`"disabled"` (no finite
+  space list) and `allowedSpaces` is unset, **nothing** is readable — history
+  refuses rather than reading every space the credential can reach.
+- **"Who" is already enforced upstream.** The `googlechat` channel decides which
+  senders/spaces reach the agent at all (`dm.allowFrom`, per-group `users`,
+  `requireMention`). These tools are called by the agent, not end users, so they
+  add no separate per-sender gate — they only bound *which spaces' content* the
+  running agent may pull.
 - **`authMode: "user"`** reads as *you* (`chat.messages.readonly`). It needs **no
   admin approval** (Internal OAuth app + self-consent), but the refresh token can
   see **every space you belong to** — so the allowlist + token hygiene are your
@@ -47,7 +61,10 @@ openclaw gateway restart
 ```json5
 {
   plugins: { allow: ["googlechat-history"] },
-  tools: { allow: ["googlechat_history", "googlechat_members", "googlechat_space_info"] }
+  // alsoAllow is ADDITIVE — it adds these optional tools on top of your tools
+  // profile. Do NOT use tools.allow (that is a restrictive exact allowlist and
+  // would drop every other tool your agent relies on).
+  tools: { alsoAllow: ["googlechat_history", "googlechat_members", "googlechat_space_info"] }
 }
 ```
 
@@ -73,7 +90,9 @@ openclaw gateway restart
    {
      plugins: { entries: { "googlechat-history": { config: {
        authMode: "user",
-       allowedSpaces: ["spaces/AAQAxxxx"],   // ONLY these are readable
+       // allowedSpaces omitted => inherits the googlechat channel allowlist
+       // (channels.googlechat.groups while groupPolicy: "allowlist").
+       // Set allowedSpaces: ["spaces/AAQAxxxx"] only to override.
        // user: { clientId, clientSecret, refreshToken }  // or GOOGLE_CHAT_OAUTH_* env
      }}}}
    }
@@ -107,7 +126,7 @@ admin must authorize `chat.app.messages.readonly` for the app
 | Key | Notes |
 | --- | ----- |
 | `authMode` | `"app"` (default) or `"user"`. |
-| `allowedSpaces` | string[] of `spaces/<id>`. **Deny-by-default**: empty/unset → nothing readable. |
+| `allowedSpaces` | string[] of `spaces/<id>`. **Set** → wins (empty array = deny all). **Unset** → inherits the `googlechat` channel allowlist (enabled `groups` while `groupPolicy: "allowlist"`); deny-by-default if that yields nothing. |
 | `serviceAccountFile` | service-account JSON path (app reads + members/space-info). |
 | `user.clientId` / `user.clientSecret` / `user.refreshToken` | user-auth creds (env fallback `GOOGLE_CHAT_OAUTH_*`). |
 | `autoContext.enabled` | inject recent history before replies (default false). |

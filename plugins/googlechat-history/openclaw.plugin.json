@@ -45,7 +45,7 @@
       "allowedSpaces": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Allowlist of readable space ids (e.g. 'spaces/AAQAxxxx'). DENY-BY-DEFAULT: if empty/unset, every tool refuses and auto-context never fires. This bounds what the agent can read; it does not reduce the token's own scope."
+        "description": "Explicit allowlist of readable space ids (e.g. 'spaces/AAQAxxxx'). When SET it wins (empty array = deny all). When UNSET it is INHERITED from the googlechat channel — the enabled channels.googlechat.groups spaces while groupPolicy is 'allowlist' — so there is one source of truth. Either way this only bounds what the agent reads; it does not reduce the token's own scope."
       },
       "autoContext": {
         "type": "object",
