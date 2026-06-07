@@ -1,0 +1,65 @@
+{
+  "name": "@lehoangnnx/openclaw-googlechat-mention",
+  "version": "0.1.0",
+  "description": "OpenClaw tool plugin to post Google Chat messages that @mention people (or everyone) in a space via the Chat API — reuses the googlechat service-account auth, deny-by-default allowlist.",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "google-chat",
+    "googlechat",
+    "chatops",
+    "ai-agent",
+    "agent-tool",
+    "mention"
+  ],
+  "license": "MIT",
+  "author": "Nguyen Le Hoang",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lehoangnnx/openclaw-plugins",
+    "directory": "plugins/googlechat-mention"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.6.1",
+      "minGatewayVersion": "2026.6.1"
+    },
+    "build": {
+      "openclawVersion": "2026.6.1",
+      "pluginSdkVersion": "2026.6.1"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "google-auth-library": "^10.6.2",
+    "typebox": "1.1.39"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "openclaw": "2026.6.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0"
+  }
+}
