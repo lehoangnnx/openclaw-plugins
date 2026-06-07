@@ -1,83 +1,61 @@
 # Google Chat Mention
 
-An OpenClaw tool plugin that lets the agent post a Google Chat message which
-**@mentions** specific people — or everyone — in a space.
+An OpenClaw tool plugin that lets the agent **@mention** people in its normal
+Google Chat reply, by resolving display names into Chat mention tokens
+(`<users/123…>`) the agent pastes into its reply text.
 
-## Why this exists
+## Why this exists (and why resolve, not send)
 
-The bundled `googlechat` channel sends replies as plain text and runs them
-through `sanitizeForPlainText`, which strips Chat's mention syntax
-(`<users/123…>`). So the normal reply path **cannot tag anyone**.
+Google Chat has two outbound paths in OpenClaw:
 
-This plugin bypasses that path: it calls `spaces.messages.create` directly with
-the raw mention syntax, so Google Chat renders a real @mention. It is an
-**additive** action — the agent's normal reply is unchanged; the agent calls
-`googlechat_mention` only when a message needs to actually notify someone.
+- The **message-tool / outbound-adapter** path runs text through
+  `sanitizeForPlainText`, which strips `<users/123…>` — so a mention sent that
+  way is lost.
+- The **normal auto-reply** path (the agent's final reply) does **not** sanitize.
+  So if the agent's reply text literally contains `<users/123…>`, Google Chat
+  renders a real @mention.
+
+This plugin therefore does **not** send anything. It exposes a tool that resolves
+people into `<users/id>` tokens; the agent pastes those tokens into its own reply.
+Result: **one message**, a real @mention, and the channel's typing indicator
+edits into that single reply (no stray "is typing…" placeholder, no duplicate
+message).
 
 ## Auth — reuses your existing service account
 
-No new secret. It reads the **same** Google Chat service account the
-`googlechat` channel and `googlechat-history` plugin already use, in this order:
+No new secret. It reads the **same** Google Chat service account the `googlechat`
+channel and `googlechat-history` plugin already use, in this order:
 
 1. `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON, env)
 2. plugin config `serviceAccountFile`, else `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path, env)
 
-Scope: `https://www.googleapis.com/auth/chat.bot` (no Workspace-admin approval
-needed — same scope the channel already sends with). The Chat app must be a
-**member** of the space, and you can only mention users who are members of it.
-
-## Config
-
-```jsonc
-{
-  "plugins": {
-    "entries": {
-      "googlechat-mention": {
-        "config": {
-          // Optional — only if you are not using the GOOGLE_CHAT_SERVICE_ACCOUNT* env.
-          "serviceAccountFile": "/path/to/sa.json",
-          // Optional — defaults to the googlechat channel's allowlist (one source of truth).
-          "allowedSpaces": ["spaces/AAQAxxxx"]
-        }
-      }
-    }
-  }
-}
-```
-
-Spaces are **deny-by-default**. If `allowedSpaces` is unset, the plugin inherits
-the enabled `channels.googlechat.groups` spaces (while `groupPolicy: "allowlist"`).
+Scope: `chat.bot`. The only Chat API call it makes is `spaces.members.list`
+(to map a display name → user id); resolving an explicit id, `me`, or `all`
+makes no API call at all. The Chat app must be a member of the space to list it.
 
 ## Tool: `googlechat_mention`
 
+Input:
+
 | Param | Required | Meaning |
 | --- | --- | --- |
-| `text` | yes | Message body. Mentions are prepended to it. |
-| `mentions` | yes | Array. Each entry is a **display name** (resolved against space members), a **user id** (`users/123…` or the bare number), or `all` (everyone). |
-| `space` | no | `spaces/AAQA…` or `AAQA…`. Omit to use the current space. Must be allowlisted. |
-| `thread` | no | Thread resource name to reply within. Omit to start a new thread. |
+| `mentions` | yes | Array. Each entry is a **display name** (resolved against members), a **user id** (`users/123…` or the number), `me`/`requester` (the person being replied to), or `all`. |
+| `space` | no | `spaces/AAQA…`. Omit to use the current space. Must be allowlisted. Only needed when resolving display names. |
 
-Behavior:
+Output: the resolved `<users/id>` token(s). The agent then writes them **verbatim**
+into its reply, e.g.:
 
-- Display names resolve against the space's **human members** (case-insensitive).
-  Unmatched or ambiguous names return an error that lists the known members, so
-  the agent can retry with a precise name or id — it never silently tags the
-  wrong person.
-- `all` → `<users/all>` (named spaces only; not 1:1 DMs).
-- Duplicate mentions are de-duplicated.
-
-### Example
-
-> "Tag Bình and let him know the deploy is done."
-
-```json
-{
-  "text": "deploy lên Fly đã xong ✅",
-  "mentions": ["Bình"]
-}
+```text
+<users/115804…> em check nhanh giá vàng hôm nay…
 ```
 
-→ posts `<users/123…> deploy lên Fly đã xong ✅`, rendering a real @Bình mention.
+which Google Chat renders as `@Name em check nhanh…`.
+
+Display names resolve against **human members** (case-insensitive). Unmatched or
+ambiguous names return an error listing the known members, so the agent retries
+with a precise name or id instead of tagging the wrong person. Spaces are
+**deny-by-default**, inheriting the `googlechat` channel allowlist unless
+`allowedSpaces` is set.
 
 ## Build
 
@@ -88,6 +66,8 @@ npm run typecheck
 
 ## Limits
 
-- Service-account (app) auth cannot mention by **email** — use a display name or
-  `users/<id>`. (Email mentions require user-auth.)
-- The app only sees / can mention members of spaces it has joined.
+- Service-account (app) auth cannot resolve by **email** — use a display name,
+  `users/<id>`, or `me`.
+- The app only sees members of spaces it has joined.
+- The agent must paste the token into its reply; the tool itself never sends a
+  message.

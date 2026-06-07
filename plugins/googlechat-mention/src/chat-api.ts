@@ -2,9 +2,9 @@ import { GoogleAuth } from "google-auth-library";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 
-// chat.bot is the same scope the googlechat channel already uses to send and the
-// googlechat-history plugin uses to list members — no Workspace admin approval
-// needed, and it is sufficient for spaces.messages.create and spaces.members.list.
+// chat.bot is the same scope the googlechat channel and googlechat-history use —
+// no Workspace admin approval needed, and it is sufficient for spaces.members.list
+// (the only Chat API call this plugin makes: resolving display names to user ids).
 const SCOPE_BOT = "https://www.googleapis.com/auth/chat.bot";
 
 type ServiceAccountSource = { keyFile: string } | { credentials: Record<string, unknown> };
@@ -114,38 +114,6 @@ export async function listAllSpaceMembers(params: {
     pageToken = data.nextPageToken;
   } while (pageToken);
   return all;
-}
-
-export type CreateMessageResult = { name?: string };
-
-// Post a message into a space. `text` is sent raw (no plain-text sanitization),
-// so Chat-native mention syntax like "<users/123>" / "<users/all>" renders as a
-// real @mention — which the bundled googlechat channel's sanitized reply path
-// strips. When `thread` is set we reply in that thread, else a new thread.
-export async function createMessage(params: {
-  space: string;
-  text: string;
-  thread?: string;
-  serviceAccountFile?: string;
-}): Promise<CreateMessageResult> {
-  const token = await getAppAccessToken(SCOPE_BOT, params.serviceAccountFile);
-  const space = normalizeSpace(params.space);
-  const url = new URL(`${CHAT_API_BASE}/${space}/messages`);
-  const body: Record<string, unknown> = { text: params.text };
-  if (params.thread) {
-    body.thread = { name: params.thread };
-    url.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-  }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const raw = await response.text().catch(() => "");
-    throw new Error(formatChatApiError(response.status, raw));
-  }
-  return (await response.json()) as CreateMessageResult;
 }
 
 /** Reset cached auth clients — exported for tests. */

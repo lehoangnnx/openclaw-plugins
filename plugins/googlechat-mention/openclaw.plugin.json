@@ -1,7 +1,7 @@
 {
   "id": "googlechat-mention",
   "name": "Google Chat Mention",
-  "description": "Post a message that @mentions specific people (or everyone) in an allowlisted Google Chat space.",
+  "description": "Resolve Google Chat @mention tokens (<users/id>) so a normal reply can tag specific people (or everyone) in an allowlisted space.",
   "contracts": {
     "tools": ["googlechat_mention"]
   },
@@ -24,7 +24,7 @@
       "allowedSpaces": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Explicit allowlist of spaces the plugin may post into (e.g. 'spaces/AAQAxxxx'). When SET it wins (empty array = deny all). When UNSET it is INHERITED from the googlechat channel — the enabled channels.googlechat.groups spaces while groupPolicy is 'allowlist' — so there is one source of truth."
+        "description": "Explicit allowlist of spaces whose membership the plugin may read to resolve names (e.g. 'spaces/AAQAxxxx'). When SET it wins (empty array = deny all). When UNSET it is INHERITED from the googlechat channel — the enabled channels.googlechat.groups spaces while groupPolicy is 'allowlist' — so there is one source of truth."
       }
     }
   }

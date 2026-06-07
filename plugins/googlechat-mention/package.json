@@ -1,7 +1,7 @@
 {
   "name": "@lehoangnnx/openclaw-googlechat-mention",
-  "version": "0.1.0",
-  "description": "OpenClaw tool plugin to post Google Chat messages that @mention people (or everyone) in a space via the Chat API — reuses the googlechat service-account auth, deny-by-default allowlist.",
+  "version": "0.2.0",
+  "description": "OpenClaw tool plugin that resolves Google Chat @mention tokens (<users/id>) so an agent's normal reply can tag people in a space — reuses the googlechat service-account auth, deny-by-default allowlist.",
   "keywords": [
     "openclaw",
     "openclaw-plugin",
