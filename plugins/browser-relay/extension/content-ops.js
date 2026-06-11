@@ -451,6 +451,223 @@ export async function extCaptureViewport(tabId, params) {
   };
 }
 
+// ── Scroll ──
+
+export async function extScroll(tabId, params) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (p) => {
+      function deepQuery(root, sel) {
+        const f = root.querySelector(sel);
+        if (f) return f;
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot) {
+            const i = deepQuery(el.shadowRoot, sel);
+            if (i) return i;
+          }
+        }
+        return null;
+      }
+      let el = null;
+      if (p.selector) {
+        try {
+          el = deepQuery(document, p.selector);
+        } catch {
+          /* ignore */
+        }
+      } else if (p.index != null) {
+        el = deepQuery(document, `[data-ocr-idx="${Number(p.index)}"]`);
+      }
+      const scroller = el || document.scrollingElement || document.documentElement;
+      const dir = String(p.direction || "down").toLowerCase();
+      const step =
+        typeof p.amount === "number"
+          ? p.amount
+          : Math.round((el ? el.clientHeight : window.innerHeight) * 0.8);
+      const before = { x: scroller.scrollLeft, y: scroller.scrollTop };
+      if (dir === "top") scroller.scrollTo({ top: 0 });
+      else if (dir === "bottom") scroller.scrollTo({ top: scroller.scrollHeight });
+      else {
+        const dx = dir === "left" ? -step : dir === "right" ? step : 0;
+        const dy = dir === "up" ? -step : dir === "down" ? step : 0;
+        scroller.scrollBy(dx, dy);
+      }
+      const after = { x: scroller.scrollLeft, y: scroller.scrollTop };
+      const maxY = scroller.scrollHeight - scroller.clientHeight;
+      return {
+        success: true,
+        direction: dir,
+        before,
+        after,
+        moved: after.x !== before.x || after.y !== before.y,
+        atBottom: after.y >= maxY - 2,
+      };
+    },
+    args: [params || {}],
+  });
+  return unwrapScriptResult(results, "Extension.scroll");
+}
+
+// ── Keyboard (synthetic, matching Accio's event model) ──
+
+export async function extPressKey(tabId, params) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (p) => {
+      const key = String(p.key || "");
+      if (!key) return { success: false, error: "key required" };
+      const mods = (Array.isArray(p.modifiers) ? p.modifiers : []).map((m) => String(m).toLowerCase());
+      const init = {
+        key,
+        code: p.code || key,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        ctrlKey: mods.includes("ctrl") || mods.includes("control"),
+        shiftKey: mods.includes("shift"),
+        altKey: mods.includes("alt"),
+        metaKey: mods.includes("meta") || mods.includes("cmd"),
+      };
+      const el = document.activeElement || document.body;
+      el.dispatchEvent(new KeyboardEvent("keydown", init));
+      el.dispatchEvent(new KeyboardEvent("keypress", init));
+      el.dispatchEvent(new KeyboardEvent("keyup", init));
+      return { success: true, key, modifiers: mods };
+    },
+    args: [params || {}],
+  });
+  return unwrapScriptResult(results, "Extension.pressKey");
+}
+
+// ── Hover ──
+
+export async function extMoveMouse(tabId, params) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (p) => {
+      function deepQuery(root, sel) {
+        const f = root.querySelector(sel);
+        if (f) return f;
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot) {
+            const i = deepQuery(el.shadowRoot, sel);
+            if (i) return i;
+          }
+        }
+        return null;
+      }
+      let el = null;
+      if (p.index != null) el = deepQuery(document, `[data-ocr-idx="${Number(p.index)}"]`);
+      else if (p.selector) {
+        try {
+          el = deepQuery(document, p.selector);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!el) return { success: false, error: "Element not found" };
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+      const r = el.getBoundingClientRect();
+      const o = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: r.left + r.width / 2,
+        clientY: r.top + r.height / 2,
+      };
+      el.dispatchEvent(new PointerEvent("pointerover", o));
+      el.dispatchEvent(new MouseEvent("mouseover", o));
+      el.dispatchEvent(new MouseEvent("mouseenter", { ...o, bubbles: false }));
+      el.dispatchEvent(new MouseEvent("mousemove", o));
+      return { success: true, tag: el.tagName.toLowerCase() };
+    },
+    args: [params || {}],
+  });
+  return unwrapScriptResult(results, "Extension.moveMouse");
+}
+
+// ── In-page keyword search ──
+
+export async function extFindKeyword(tabId, params) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (p) => {
+      const kw = String(p.keyword || "").trim();
+      if (!kw) return { success: false, error: "keyword required" };
+      const limit = Number(p.limit) || 20;
+      const low = kw.toLowerCase();
+      const out = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const t = node.textContent || "";
+        const idx = t.toLowerCase().indexOf(low);
+        if (idx < 0) continue;
+        const ctx = t.slice(Math.max(0, idx - 40), idx + kw.length + 40).replace(/\s+/g, " ").trim();
+        let scrolled = false;
+        if (out.length === 0 && node.parentElement) {
+          node.parentElement.scrollIntoView({ block: "center", behavior: "instant" });
+          scrolled = true;
+        }
+        out.push({ context: ctx, tag: node.parentElement?.tagName.toLowerCase() || "", scrolled });
+        if (out.length >= limit) break;
+      }
+      return { success: true, keyword: kw, count: out.length, matches: out };
+    },
+    args: [params || {}],
+  });
+  return unwrapScriptResult(results, "Extension.findKeyword");
+}
+
+// ── Viewport info ──
+
+export async function extGetViewportInfo(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      dpr: window.devicePixelRatio || 1,
+      scrollX: Math.round(window.scrollX),
+      scrollY: Math.round(window.scrollY),
+      scrollWidth: document.documentElement.scrollWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      url: location.href,
+      title: document.title,
+    }),
+  });
+  return unwrapScriptResult(results, "Extension.getViewportInfo");
+}
+
+// ── Zoom ──
+
+export async function extEnsureZoom(tabId, params) {
+  const target = typeof params?.zoom === "number" ? params.zoom : 1;
+  const cur = await chrome.tabs.getZoom(tabId);
+  if (Math.abs(cur - target) > 0.01) {
+    await chrome.tabs.setZoom(tabId, target);
+    return { changed: true, from: cur, to: target };
+  }
+  return { changed: false, current: cur };
+}
+
+// ── Navigate the current tab (chrome.tabs API; no CDP needed) ──
+
+export async function extNavigate(tabId, params) {
+  const url = String(params?.url || "").trim();
+  if (!url) throw new Error("url required");
+  await chrome.tabs.update(tabId, { url });
+  // Best-effort wait for load so the next observe/read sees the new page (~8s cap).
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (t && t.status === "complete") return { success: true, url: t.url || url, title: t.title || "" };
+  }
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  return { success: true, url: t?.url || url, title: t?.title || "", note: "load wait timed out" };
+}
+
 /** Methods this module owns; background routes these instead of raw CDP. */
 export const EXTENSION_OP_METHODS = new Set([
   "Extension.markElements",
@@ -458,12 +675,16 @@ export const EXTENSION_OP_METHODS = new Set([
   "Extension.click",
   "Extension.input",
   "Extension.captureViewport",
+  "Extension.scroll",
+  "Extension.pressKey",
+  "Extension.moveMouse",
+  "Extension.findKeyword",
+  "Extension.getViewportInfo",
+  "Extension.ensureZoom",
+  "Extension.navigate",
 ]);
 
-/**
- * Dispatch one `Extension.*` command for an already-resolved tab.
- * `needsAttach` is true only for captureViewport (CDP screenshot).
- */
+/** Dispatch one `Extension.*` command for an already-resolved tab. */
 export async function handleExtensionOp(method, tabId, params) {
   switch (method) {
     case "Extension.markElements":
@@ -476,12 +697,26 @@ export async function handleExtensionOp(method, tabId, params) {
       return await extInput(tabId, params);
     case "Extension.captureViewport":
       return await extCaptureViewport(tabId, params);
+    case "Extension.scroll":
+      return await extScroll(tabId, params);
+    case "Extension.pressKey":
+      return await extPressKey(tabId, params);
+    case "Extension.moveMouse":
+      return await extMoveMouse(tabId, params);
+    case "Extension.findKeyword":
+      return await extFindKeyword(tabId, params);
+    case "Extension.getViewportInfo":
+      return await extGetViewportInfo(tabId);
+    case "Extension.ensureZoom":
+      return await extEnsureZoom(tabId, params);
+    case "Extension.navigate":
+      return await extNavigate(tabId, params);
     default:
       throw new Error(`Unknown Extension command: ${method}`);
   }
 }
 
-/** captureViewport is the only MVP op that needs a CDP debugger attach. */
+/** captureViewport is the only op that needs a live CDP debugger attach. */
 export function extensionOpNeedsAttach(method) {
   return method === "Extension.captureViewport";
 }
