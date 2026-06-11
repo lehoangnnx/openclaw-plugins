@@ -43,6 +43,36 @@ const tabOperationLocks = new Set()
 /** @type {Set<number>} */
 const reattachPending = new Set()
 
+// Tabs the agent itself opened (via Target.createTarget). Only these may be
+// closed by Target.closeTarget — the agent must never close a user's own tab.
+/** @type {Set<number>} */
+const agentTabs = new Set()
+
+// Fixed-size ring buffer of recent relay traffic, surfaced in the popup for
+// diagnostics without opening the service-worker devtools.
+const LOG_CAP = 200
+/** @type {Array<{ts:number, dir:string, method:string}>} */
+const logRing = new Array(LOG_CAP)
+let logSeq = 0
+function pushLog(dir, method) {
+  logRing[logSeq % LOG_CAP] = { ts: Date.now(), dir, method }
+  logSeq++
+}
+function getLogBuffer(limit = 100) {
+  const n = Math.min(limit, Math.min(logSeq, LOG_CAP))
+  const out = []
+  for (let i = logSeq - n; i < logSeq; i++) {
+    const e = logRing[((i % LOG_CAP) + LOG_CAP) % LOG_CAP]
+    if (e) out.push(e)
+  }
+  return out
+}
+
+// True when the last connect attempt could not even reach the relay (preflight
+// failed). Shortens reconnect backoff so we re-attach fast once the relay comes
+// back, instead of waiting out the full 30s ramp.
+let serverUnreachable = false
+
 // Reconnect state for exponential backoff.
 let reconnectAttempt = 0
 let reconnectTimer = null
@@ -117,6 +147,81 @@ function setBadge(tabId, kind) {
   void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
 }
 
+// ── Agent tab group + "agent is driving" indicator ──
+// Agent-created tabs are corralled into one labeled, colored tab group so the
+// user sees at a glance which tabs OpenClaw controls. While the relay is
+// connected and at least one agent tab exists, the group title animates a
+// spinner — an honest, always-visible signal that the agent may be acting.
+const AGENT_GROUP_TITLE = 'OpenClaw Agent'
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+let agentGroupId = null
+let groupQueue = Promise.resolve()
+let spinnerTimer = null
+let spinnerFrame = 0
+
+function groupTitleMatches(title) {
+  const t = String(title || '')
+  // Tolerate the spinner prefix so we still recover the group after a restart.
+  return t === AGENT_GROUP_TITLE || t.endsWith(` ${AGENT_GROUP_TITLE}`)
+}
+
+// Serialize group operations: concurrent chrome.tabs.group calls would each
+// spawn a separate group. Reuse a cached or by-title-recovered group so the
+// agent's tabs stay in one place across service-worker restarts.
+function addToAgentGroup(tabId) {
+  groupQueue = groupQueue.then(async () => {
+    try {
+      if (agentGroupId != null) {
+        try {
+          await chrome.tabGroups.get(agentGroupId)
+        } catch {
+          agentGroupId = null
+        }
+      }
+      if (agentGroupId == null) {
+        const groups = await chrome.tabGroups.query({}).catch(() => [])
+        const existing = groups.find((g) => groupTitleMatches(g.title))
+        if (existing) agentGroupId = existing.id
+      }
+      const gid = await chrome.tabs.group(
+        agentGroupId != null ? { tabIds: tabId, groupId: agentGroupId } : { tabIds: tabId },
+      )
+      agentGroupId = gid
+      await chrome.tabGroups.update(gid, { title: AGENT_GROUP_TITLE, color: 'blue' }).catch(() => {})
+    } catch {
+      // Grouping is best-effort cosmetics; never block automation on it.
+    }
+  })
+  return groupQueue
+}
+
+// Spinner runs only while the relay WS is open (which keeps the MV3 service
+// worker alive) AND the agent owns at least one tab.
+function refreshIndicator() {
+  const active = Boolean(relayWs && relayWs.readyState === WebSocket.OPEN) && agentTabs.size > 0
+  if (active) startSpinner()
+  else stopSpinner()
+}
+
+function startSpinner() {
+  if (spinnerTimer) return
+  spinnerTimer = setInterval(() => {
+    if (agentGroupId == null) return
+    const frame = SPINNER_FRAMES[spinnerFrame++ % SPINNER_FRAMES.length]
+    void chrome.tabGroups.update(agentGroupId, { title: `${frame} ${AGENT_GROUP_TITLE}` }).catch(() => {})
+  }, 200)
+}
+
+function stopSpinner() {
+  if (spinnerTimer) {
+    clearInterval(spinnerTimer)
+    spinnerTimer = null
+  }
+  if (agentGroupId != null) {
+    void chrome.tabGroups.update(agentGroupId, { title: AGENT_GROUP_TITLE }).catch(() => {})
+  }
+}
+
 // Persist attached tab state to survive MV3 service worker restarts.
 async function persistState() {
   try {
@@ -129,6 +234,7 @@ async function persistState() {
     await chrome.storage.session.set({
       persistedTabs: tabEntries,
       nextSession,
+      agentTabs: [...agentTabs],
     })
   } catch {
     // chrome.storage.session may not be available in all contexts.
@@ -139,10 +245,11 @@ async function persistState() {
 // maps and badges. Relay reconnect happens separately in background.
 async function rehydrateState() {
   try {
-    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession'])
+    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession', 'agentTabs'])
     if (stored.nextSession) {
       nextSession = Math.max(nextSession, stored.nextSession)
     }
+    for (const id of stored.agentTabs || []) agentTabs.add(id)
     const entries = stored.persistedTabs || []
     // Phase 1: optimistically restore state and badges.
     for (const entry of entries) {
@@ -162,7 +269,26 @@ async function rehydrateState() {
       if (!valid) {
         tabs.delete(entry.tabId)
         tabBySession.delete(entry.sessionId)
+        agentTabs.delete(entry.tabId)
         setBadge(entry.tabId, 'off')
+      }
+    }
+    // Drop ownership for agent tabs the user closed while the worker was dead.
+    for (const id of [...agentTabs]) {
+      try {
+        await chrome.tabs.get(id)
+      } catch {
+        agentTabs.delete(id)
+      }
+    }
+    // Recover the cached agent group id so the spinner resumes after a restart.
+    if (agentTabs.size > 0) {
+      try {
+        const groups = await chrome.tabGroups.query({})
+        const existing = groups.find((g) => groupTitleMatches(g.title))
+        if (existing) agentGroupId = existing.id
+      } catch {
+        // tabGroups may be unavailable; spinner stays off until next open.
       }
     }
   } catch {
@@ -184,7 +310,9 @@ async function ensureRelayConnection() {
     // return 401, but any non-network response still proves reachability.
     try {
       await fetch(`${httpBase}/json/version`, { method: 'HEAD', signal: AbortSignal.timeout(3000) })
+      serverUnreachable = false
     } catch (err) {
+      serverUnreachable = true
       throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
     }
 
@@ -248,6 +376,9 @@ function onRelayClosed(reason) {
 
   reattachPending.clear()
 
+  // Relay dropped — kill the "agent active" spinner; it is no longer honest.
+  stopSpinner()
+
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') {
       setBadge(tabId, 'connecting')
@@ -267,7 +398,11 @@ function scheduleReconnect() {
     reconnectTimer = null
   }
 
-  const delay = reconnectDelayMs(reconnectAttempt)
+  // When the relay is unreachable, cap backoff low so we re-attach quickly once
+  // it returns; for other errors use the normal ramp to avoid hammering.
+  const delay = serverUnreachable
+    ? reconnectDelayMs(reconnectAttempt, { baseMs: 500, maxMs: 3000, jitterMs: 1000, random: Math.random })
+    : reconnectDelayMs(reconnectAttempt)
   reconnectAttempt++
 
   console.log(`Scheduling reconnect attempt ${reconnectAttempt} in ${Math.round(delay)}ms`)
@@ -367,6 +502,7 @@ async function reannounceAttachedTabs() {
   }
 
   await persistState()
+  refreshIndicator()
 }
 
 function sendToRelay(payload) {
@@ -374,6 +510,12 @@ function sendToRelay(payload) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     throw new Error('Relay not connected')
   }
+  pushLog(
+    '↑',
+    payload?.method === 'forwardCDPEvent'
+      ? `evt:${payload?.params?.method || '?'}`
+      : payload?.method || payload?.type || (payload?.id != null ? 'res' : '?'),
+  )
   ws.send(JSON.stringify(payload))
 }
 
@@ -491,6 +633,7 @@ async function onRelayMessage(text) {
   }
 
   if (msg && typeof msg.id === 'number' && msg.method === 'forwardCDPCommand') {
+    pushLog('↓', `cmd:${String(msg?.params?.method || '?')}`)
     try {
       const result = await handleForwardCdpCommand(msg)
       sendToRelay({ id: msg.id, result })
@@ -680,9 +823,25 @@ async function handleForwardCdpCommand(msg) {
     const url = typeof params?.url === 'string' ? params.url : 'about:blank'
     const tab = await chrome.tabs.create({ url, active: false })
     if (!tab.id) throw new Error('Failed to create tab')
+    // Track ownership before attach so close-gating and cleanup stay correct
+    // even if a quick close races the attach below.
+    agentTabs.add(tab.id)
+    void addToAgentGroup(tab.id)
     await new Promise((r) => setTimeout(r, 100))
-    const attached = await attachTab(tab.id)
-    return { targetId: attached.targetId }
+    try {
+      const attached = await attachTab(tab.id)
+      refreshIndicator()
+      return { targetId: attached.targetId }
+    } catch (err) {
+      // Attach failed — roll back so we never leave an orphan agent tab.
+      agentTabs.delete(tab.id)
+      try {
+        await chrome.tabs.remove(tab.id)
+      } catch {
+        // Tab already gone.
+      }
+      throw err
+    }
   }
 
   const bySession = sessionId ? getTabBySessionId(sessionId) : null
@@ -716,6 +875,14 @@ async function handleForwardCdpCommand(msg) {
     const target = typeof params?.targetId === 'string' ? params.targetId : ''
     const toClose = target ? getTabByTargetId(target) : tabId
     if (!toClose) return { success: false }
+    // Safety: the agent may only close tabs it opened itself (via
+    // Target.createTarget). Never close a user's own tab, even if attached.
+    if (!agentTabs.has(toClose)) {
+      return {
+        success: false,
+        error: 'Refusing to close a tab the agent did not open. Only agent-opened tabs can be closed.',
+      }
+    }
     try {
       const allTabs = await chrome.tabs.query({})
       if (isLastRemainingTab(allTabs, toClose)) {
@@ -726,6 +893,8 @@ async function handleForwardCdpCommand(msg) {
     } catch {
       return { success: false }
     }
+    agentTabs.delete(toClose)
+    refreshIndicator()
     return { success: true }
   }
 
@@ -889,7 +1058,11 @@ async function onDebuggerDetach(source, reason) {
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
   reattachPending.delete(tabId)
-  if (!tabs.has(tabId)) return
+  const wasAgent = agentTabs.delete(tabId)
+  if (!tabs.has(tabId)) {
+    if (wasAgent) refreshIndicator()
+    return
+  }
   const tab = tabs.get(tabId)
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
@@ -910,11 +1083,13 @@ chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
     }
   }
   void persistState()
+  refreshIndicator()
 }))
 
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(() => {
   const tab = tabs.get(removedTabId)
   if (!tab) return
+  if (agentTabs.delete(removedTabId)) agentTabs.add(addedTabId)
   tabs.delete(removedTabId)
   tabs.set(addedTabId, tab)
   if (tab.sessionId) {
@@ -934,7 +1109,9 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
 chrome.debugger.onEvent.addListener((...args) => void whenReady(() => onDebuggerEvent(...args)))
 chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebuggerDetach(...args)))
 
-chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
+// Toolbar click now opens the popup (manifest action.default_popup); the popup
+// triggers manual attach/detach of the active tab via the toggleActiveTab
+// message. connectOrToggleForActiveTab stays the single entry point for both.
 
 // Refresh badge after navigation completes — service worker may have restarted
 // during navigation, losing ephemeral badge state.
@@ -1010,6 +1187,58 @@ async function whenReady(fn) {
   await initPromise
   return fn()
 }
+
+// Popup status / control channel.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'getRelayStatus') {
+    const connected = Boolean(relayWs && relayWs.readyState === WebSocket.OPEN)
+    let attached = 0
+    for (const t of tabs.values()) if (t.state === 'connected') attached++
+    sendResponse({
+      connected,
+      reconnecting: Boolean(reconnectTimer || relayConnectPromise),
+      attachedTabs: attached,
+      agentTabs: agentTabs.size,
+    })
+    return false
+  }
+  if (msg?.type === 'getTabList') {
+    const out = []
+    for (const [tabId, t] of tabs.entries()) {
+      out.push({ tabId, state: t.state, targetId: t.targetId || '', isAgent: agentTabs.has(tabId) })
+    }
+    sendResponse({ tabs: out })
+    return false
+  }
+  if (msg?.type === 'getLogs') {
+    sendResponse({ logs: getLogBuffer(typeof msg.limit === 'number' ? msg.limit : 100) })
+    return false
+  }
+  if (msg?.type === 'toggleActiveTab') {
+    connectOrToggleForActiveTab()
+      .then(() => {
+        try { sendResponse({ ok: true }) } catch { /* channel closed */ }
+      })
+      .catch((e) => {
+        try { sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }) } catch { /* channel closed */ }
+      })
+    return true
+  }
+  if (msg?.type === 'reconnectNow') {
+    cancelReconnect()
+    ensureRelayConnection()
+      .then(() => reannounceAttachedTabs())
+      .then(() => {
+        try { sendResponse({ ok: true }) } catch { /* channel closed */ }
+      })
+      .catch((e) => {
+        scheduleReconnect()
+        try { sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }) } catch { /* channel closed */ }
+      })
+    return true
+  }
+  return false
+})
 
 // Relay check handler for the options page. The service worker has
 // host_permissions and bypasses CORS preflight, so the options page

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenClaw Browser Relay</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #ff5a36;
+        --panel: color-mix(in oklab, canvas 92%, canvasText 8%);
+        --border: color-mix(in oklab, canvasText 18%, transparent);
+        --muted: color-mix(in oklab, canvasText 60%, transparent);
+        font-family: ui-rounded, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.4;
+      }
+      body {
+        margin: 0;
+        width: 320px;
+        background: canvas;
+        color: canvasText;
+        font-size: 13px;
+      }
+      .wrap {
+        padding: 14px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .logo {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        background: color-mix(in oklab, var(--accent) 18%, transparent);
+        border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+        display: grid;
+        place-items: center;
+      }
+      .logo img {
+        width: 20px;
+        height: 20px;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0;
+        flex: 1;
+      }
+      .pill {
+        font-size: 11px;
+        font-weight: 650;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        white-space: nowrap;
+      }
+      .pill[data-kind='ok'] {
+        color: #16a34a;
+        border-color: color-mix(in oklab, #16a34a 45%, transparent);
+        background: color-mix(in oklab, #16a34a 12%, transparent);
+      }
+      .pill[data-kind='warn'] {
+        color: #d97706;
+        border-color: color-mix(in oklab, #d97706 45%, transparent);
+        background: color-mix(in oklab, #d97706 12%, transparent);
+      }
+      .pill[data-kind='off'] {
+        color: var(--muted);
+      }
+      .url {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+        color: var(--muted);
+        word-break: break-all;
+        margin-bottom: 10px;
+      }
+      .stats {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .stat {
+        flex: 1;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        text-align: center;
+      }
+      .stat b {
+        display: block;
+        font-size: 18px;
+      }
+      .stat span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      button {
+        flex: 1;
+        padding: 8px 6px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: canvasText;
+        font-weight: 600;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+        background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 80%, white 20%), var(--accent));
+        color: white;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .logs-title {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      ul.logs {
+        list-style: none;
+        margin: 0;
+        padding: 6px;
+        max-height: 150px;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+      }
+      ul.logs li {
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+        padding: 1px 0;
+      }
+      ul.logs .dir {
+        width: 12px;
+        color: var(--accent);
+      }
+      ul.logs .m {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      ul.logs .t {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      ul.logs .empty {
+        color: var(--muted);
+        justify-content: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo" aria-hidden="true"><img src="icons/icon128.png" alt="" /></div>
+        <h1>Browser Relay</h1>
+        <span class="pill" id="status" data-kind="off">…</span>
+      </header>
+
+      <div class="url" id="relay-url"></div>
+
+      <div class="stats">
+        <div class="stat"><b id="stat-attached">0</b><span>attached tabs</span></div>
+        <div class="stat"><b id="stat-agent">0</b><span>agent tabs</span></div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="reconnect" type="button">Reconnect</button>
+        <button id="attach" type="button">Attach tab</button>
+        <button id="options" type="button">Settings</button>
+      </div>
+
+      <div class="logs-title">Recent relay activity</div>
+      <ul class="logs" id="logs"></ul>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

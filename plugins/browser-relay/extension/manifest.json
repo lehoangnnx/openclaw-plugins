@@ -9,11 +9,12 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["debugger", "tabs", "activeTab", "storage", "alarms", "webNavigation"],
+  "permissions": ["debugger", "tabs", "tabGroups", "activeTab", "storage", "alarms", "webNavigation"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "https://openclaw-lehoang.fly.dev/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
-    "default_title": "OpenClaw Browser Relay (click to attach/detach)",
+    "default_title": "OpenClaw Browser Relay",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
