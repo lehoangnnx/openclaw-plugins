@@ -672,6 +672,19 @@ async function handleForwardCdpCommand(msg) {
   const params = msg?.params?.params || undefined
   const sessionId = typeof msg?.params?.sessionId === 'string' ? msg.params.sessionId : undefined
 
+  // Target.createTarget opens a brand-new tab, so it must run BEFORE the
+  // attached-tab gate below — otherwise the very first open (no tabs attached
+  // yet) fails with "No attached tab". The new tab is auto-attached, which is
+  // what makes fully autonomous open work (no manual toolbar click needed).
+  if (method === 'Target.createTarget') {
+    const url = typeof params?.url === 'string' ? params.url : 'about:blank'
+    const tab = await chrome.tabs.create({ url, active: false })
+    if (!tab.id) throw new Error('Failed to create tab')
+    await new Promise((r) => setTimeout(r, 100))
+    const attached = await attachTab(tab.id)
+    return { targetId: attached.targetId }
+  }
+
   const bySession = sessionId ? getTabBySessionId(sessionId) : null
   const targetId = typeof params?.targetId === 'string' ? params.targetId : undefined
   const tabId =
@@ -697,15 +710,6 @@ async function handleForwardCdpCommand(msg) {
       // ignore
     }
     return await chrome.debugger.sendCommand(debuggee, 'Runtime.enable', params)
-  }
-
-  if (method === 'Target.createTarget') {
-    const url = typeof params?.url === 'string' ? params.url : 'about:blank'
-    const tab = await chrome.tabs.create({ url, active: false })
-    if (!tab.id) throw new Error('Failed to create tab')
-    await new Promise((r) => setTimeout(r, 100))
-    const attached = await attachTab(tab.id)
-    return { targetId: attached.targetId }
   }
 
   if (method === 'Target.closeTarget') {
@@ -962,8 +966,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'relay-keepalive') return
   await initPromise
 
-  if (tabs.size === 0) return
-
   // Refresh badges (ephemeral in MV3).
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') {
@@ -992,14 +994,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 const initPromise = rehydrateState()
 
 initPromise.then(() => {
-  if (tabs.size > 0) {
-    ensureRelayConnection().then(() => {
-      reconnectAttempt = 0
-      return reannounceAttachedTabs()
-    }).catch(() => {
-      scheduleReconnect()
-    })
-  }
+  // Always maintain the relay connection, even with no attached tabs, so the
+  // agent can autonomously open the first tab via Target.createTarget without
+  // any manual toolbar click.
+  ensureRelayConnection().then(() => {
+    reconnectAttempt = 0
+    return reannounceAttachedTabs()
+  }).catch(() => {
+    scheduleReconnect()
+  })
 })
 
 // Shared gate: all state-dependent handlers await this before accessing maps.
