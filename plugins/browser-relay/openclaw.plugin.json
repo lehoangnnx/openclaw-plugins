@@ -1,0 +1,24 @@
+{
+  "id": "browser-relay",
+  "name": "Browser Relay",
+  "description": "Drive your real, logged-in browser via a companion Chrome extension over a local CDP relay. The extension dials the relay's /extension endpoint; the built-in browser tool connects to /cdp through a cdpUrl profile.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "Loopback CDP relay port (default 18792). The extension connects to /extension and the browser tool connects to /cdp on this port. Currently also settable via OPENCLAW_BROWSER_RELAY_PORT."
+      },
+      "bindHost": {
+        "type": "string",
+        "description": "Bind address. Default loopback. Set a non-loopback address only for remote/WSL2 setups that expose /extension. Currently also settable via OPENCLAW_BROWSER_RELAY_BIND_HOST."
+      }
+    }
+  }
+}
