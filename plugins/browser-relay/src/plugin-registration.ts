@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { createBrowserFastTool } from "./browser-fast-tool.js";
 
 const DEFAULT_RELAY_PORT = 18792;
 
@@ -60,5 +61,20 @@ export const browserRelayReload = { restartPrefixes: ["browser-relay"] };
 
 /** Register the Browser Relay service with the host. */
 export function registerBrowserRelayPlugin(api: OpenClawPluginApi): void {
+  const port = resolveRelayPort();
   api.registerService(createBrowserRelayService());
+
+  // Coarse-grained fast tool. The factory is sync (only the light tool module is
+  // imported eagerly); the heavy relay module stays lazy — resolveServer dynamic
+  // -imports it at call time, after the service has started and a tab is attached.
+  api.registerTool(
+    () =>
+      createBrowserFastTool({
+        resolveServer: async () => {
+          const { getChromeExtensionRelayServer } = await import("./relay/extension-relay.js");
+          return getChromeExtensionRelayServer(port);
+        },
+      }),
+    { name: "browser_fast" },
+  );
 }

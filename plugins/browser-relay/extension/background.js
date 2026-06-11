@@ -5,6 +5,7 @@ import {
   isRetryableReconnectError,
   reconnectDelayMs,
 } from './background-utils.js'
+import { EXTENSION_OP_METHODS, handleExtensionOp } from './content-ops.js'
 
 const DEFAULT_PORT = 18792
 
@@ -940,6 +941,13 @@ async function handleForwardCdpCommand(msg) {
   // Stamp activity so the idle reaper and the spinner know this tab is in use.
   const activeEntry = tabs.get(tabId)
   if (activeEntry) activeEntry.lastActivityAt = Date.now()
+
+  // Coarse-grained fast path: Extension.* run as one injected script (or one
+  // CDP screenshot) and return structured data in a single round-trip, instead
+  // of the many fine-grained CDP calls the Playwright /cdp path would issue.
+  if (EXTENSION_OP_METHODS.has(method)) {
+    return await handleExtensionOp(method, tabId, params)
+  }
 
   /** @type {chrome.debugger.DebuggerSession} */
   const debuggee = { tabId }

@@ -126,6 +126,14 @@ function isProxiedRequest(req: IncomingMessage): boolean {
   );
 }
 
+/** A page target the extension currently has attached, surfaced for the fast tool. */
+export type ExtensionRelayTarget = {
+  targetId: string;
+  sessionId: string;
+  url?: string;
+  title?: string;
+};
+
 export type ChromeExtensionRelayServer = {
   host: string;
   bindHost: string;
@@ -133,6 +141,20 @@ export type ChromeExtensionRelayServer = {
   baseUrl: string;
   cdpWsUrl: string;
   extensionConnected: () => boolean;
+  /**
+   * Send a single high-level command straight to the extension and await its
+   * result — one relay round-trip, bypassing the chatty Playwright `/cdp` path.
+   * Used by the coarse-grained `Extension.*` fast tool. `opts.sessionId` (or
+   * `opts.targetId`) selects the tab; omit to let the extension pick its sole
+   * attached tab.
+   */
+  sendExtensionCommand: (
+    method: string,
+    params?: unknown,
+    opts?: { sessionId?: string; targetId?: string },
+  ) => Promise<unknown>;
+  /** Page targets the extension currently has attached. */
+  listExtensionTargets: () => ExtensionRelayTarget[];
   stop: () => Promise<void>;
 };
 
@@ -235,6 +257,16 @@ export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, 
     return {};
   }
   return { [RELAY_AUTH_HEADER]: token };
+}
+
+/**
+ * Resolve the running relay server for a loopback port. The coarse-grained fast
+ * tool runs in-process with the relay (same gateway), so it grabs the live
+ * handle here and calls `sendExtensionCommand` directly — no socket hop.
+ * Returns null when no relay is listening on that port yet.
+ */
+export function getChromeExtensionRelayServer(port: number): ChromeExtensionRelayServer | null {
+  return relayRuntimeByPort.get(port)?.server ?? null;
 }
 
 export async function ensureChromeExtensionRelayServer(opts: {
@@ -1014,6 +1046,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
           baseUrl: info.baseUrl,
           cdpWsUrl: `ws://${info.host}:${info.port}/cdp`,
           extensionConnected: () => false,
+          sendExtensionCommand: async () => {
+            throw new Error("extension relay owned by another process");
+          },
+          listExtensionTargets: () => [],
           stop: async () => {
             relayRuntimeByPort.delete(info.port);
           },
@@ -1037,6 +1073,27 @@ export async function ensureChromeExtensionRelayServer(opts: {
       baseUrl,
       cdpWsUrl: `ws://${host}:${port}/cdp`,
       extensionConnected,
+      sendExtensionCommand: async (method, params, opts) => {
+        // One round-trip to the extension. targetId is embedded inside the inner
+        // params so the extension's getTabByTargetId() resolves the right tab;
+        // sessionId rides the forwardCDPCommand envelope like the /cdp path.
+        const innerParams =
+          opts?.targetId !== undefined
+            ? { ...((params as Record<string, unknown>) ?? {}), targetId: opts.targetId }
+            : params;
+        return await sendToExtension({
+          id: nextExtensionId++,
+          method: "forwardCDPCommand",
+          params: { method, sessionId: opts?.sessionId, params: innerParams },
+        });
+      },
+      listExtensionTargets: () =>
+        Array.from(connectedTargets.values()).map((t) => ({
+          targetId: t.targetId,
+          sessionId: t.sessionId,
+          url: t.targetInfo.url,
+          title: t.targetInfo.title,
+        })),
       stop: async () => {
         relayRuntimeByPort.delete(port);
         clearExtensionDisconnectCleanupTimer();
