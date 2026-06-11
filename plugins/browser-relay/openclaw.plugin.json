@@ -5,6 +5,14 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "tools": ["browser_fast"]
+  },
+  "toolMetadata": {
+    "browser_fast": {
+      "optional": true
+    }
+  },
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
