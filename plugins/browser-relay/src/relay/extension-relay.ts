@@ -111,6 +111,21 @@ function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string |
   return undefined;
 }
 
+/**
+ * True when a request arrived through the public reverse proxy (Caddy/Fly),
+ * which always sets a forwarded-client header. Direct in-container loopback
+ * callers — the OpenClaw `browser` tool reaching /cdp and /json over
+ * 127.0.0.1 — do not set one, so they are trusted without a token; proxied
+ * (public) requests still must present a valid token. /extension stays
+ * token-gated regardless. Phase 2 (multi-tenant) replaces this with per-tenant
+ * /cdp auth.
+ */
+function isProxiedRequest(req: IncomingMessage): boolean {
+  return Boolean(
+    getHeader(req, "x-forwarded-for")?.trim() || getHeader(req, "fly-client-ip")?.trim(),
+  );
+}
+
 export type ChromeExtensionRelayServer = {
   host: string;
   bindHost: string;
@@ -571,7 +586,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return;
       }
 
-      if (path.startsWith("/json")) {
+      if (path.startsWith("/json") && isProxiedRequest(req)) {
         const token = getRelayAuthTokenFromRequest(req, url);
         if (!token || !relayAuthTokens.has(token)) {
           res.writeHead(401);
@@ -732,10 +747,15 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/cdp") {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
-          rejectUpgrade(socket, 401, "Unauthorized");
-          return;
+        // /cdp is loopback-only (never routed by the public proxy). Trust direct
+        // in-container callers (the browser tool); require a token only if the
+        // request somehow arrives proxied. Phase 2 adds per-tenant /cdp auth.
+        if (isProxiedRequest(req)) {
+          const token = getRelayAuthTokenFromRequest(req, url);
+          if (!token || !relayAuthTokens.has(token)) {
+            rejectUpgrade(socket, 401, "Unauthorized");
+            return;
+          }
         }
         // Allow CDP clients to connect even during brief extension worker drops.
         // Individual commands already wait briefly for extension reconnect.
