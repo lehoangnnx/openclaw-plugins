@@ -41,6 +41,8 @@ interactive structure.
 4. The result is `{ title, url, method, content }`. `content` is clean Markdown
    (≤50k chars). `method` tells you which extractor won (`walker` / `scoring` /
    `body-fallback`) — useful if output looks thin.
+5. **When you have what you need, close the tab you opened** — see "Close the
+   tab when done" below.
 
 ## Feed mode (multiple posts, e.g. "read 10 Facebook posts")
 
@@ -56,6 +58,7 @@ Feeds are virtualized: only the posts near the viewport exist in the DOM, so you
      re-renders as you scroll).
    - If you still need more, scroll to load additional posts, then re-extract.
 4. Return the first N unique posts' `text` to the user.
+5. **Close the tab when done** — see "Close the tab when done" below.
 
 **Scroll + wait in one call** (paste as `fn`; it scrolls, waits 1.5s for lazy
 content, and reports the new page height so you can detect "end of feed"):
@@ -81,6 +84,19 @@ If `after === before` across two scrolls, you have reached the end — stop.
 
 If unsure, first run a probe to count candidates and pick a selector:
 `{ action: "act", request: { kind: "evaluate", fn: "() => ['[role=\\"article\\"]','article','[data-testid=\\"tweet\\"]'].map(s=>({s,n:document.querySelectorAll(s).length}))" } }`
+
+## Close the tab when done
+
+This skill opens a tab in the user's **real** browser, so clean up after
+yourself. Once you've extracted everything you need, close it:
+
+`browser` `{ action: "close", targetId: "<the targetId returned by open>" }`
+
+(or simply `{ action: "close" }` to close the current agent tab). Closing
+releases the `chrome.debugger` banner and keeps the user's browser tidy.
+Skip closing only if the user explicitly asked to leave the page open.
+(The relay also auto-releases idle agent tabs as a backstop, but closing
+promptly when finished is the right behavior.)
 
 ## Notes
 
