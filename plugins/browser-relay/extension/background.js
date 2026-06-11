@@ -158,6 +158,7 @@ let agentGroupId = null
 let groupQueue = Promise.resolve()
 let spinnerTimer = null
 let spinnerFrame = 0
+let spinnerStatic = false
 
 function groupTitleMatches(title) {
   const t = String(title || '')
@@ -205,10 +206,27 @@ function refreshIndicator() {
 
 function startSpinner() {
   if (spinnerTimer) return
+  // Animate only while actually driving (a CDP command in the last ~15s). When
+  // the agent owns tabs but is idle, show a static title — so the spinner means
+  // "working now", not "spinning forever after a finished task".
   spinnerTimer = setInterval(() => {
     if (agentGroupId == null) return
-    const frame = SPINNER_FRAMES[spinnerFrame++ % SPINNER_FRAMES.length]
-    void chrome.tabGroups.update(agentGroupId, { title: `${frame} ${AGENT_GROUP_TITLE}` }).catch(() => {})
+    const now = Date.now()
+    let driving = false
+    for (const [tabId, tab] of tabs.entries()) {
+      if (agentTabs.has(tabId) && tab.lastActivityAt && now - tab.lastActivityAt < 15000) {
+        driving = true
+        break
+      }
+    }
+    if (driving) {
+      const frame = SPINNER_FRAMES[spinnerFrame++ % SPINNER_FRAMES.length]
+      void chrome.tabGroups.update(agentGroupId, { title: `${frame} ${AGENT_GROUP_TITLE}` }).catch(() => {})
+      spinnerStatic = false
+    } else if (!spinnerStatic) {
+      void chrome.tabGroups.update(agentGroupId, { title: AGENT_GROUP_TITLE }).catch(() => {})
+      spinnerStatic = true
+    }
   }, 200)
 }
 
@@ -258,6 +276,7 @@ async function rehydrateState() {
         sessionId: entry.sessionId,
         targetId: entry.targetId,
         attachOrder: entry.attachOrder,
+        lastActivityAt: Date.now(),
       })
       tabBySession.set(entry.sessionId, entry.tabId)
       setBadge(entry.tabId, 'on')
@@ -674,7 +693,7 @@ async function attachTab(tabId, opts = {}) {
   const sessionId = `cb-tab-${sid}`
   const attachOrder = sid
 
-  tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
+  tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder, lastActivityAt: Date.now() })
   tabBySession.set(sessionId, tabId)
   void chrome.action.setTitle({
     tabId,
@@ -753,6 +772,66 @@ async function detachTab(tabId, reason) {
   })
 
   await persistState()
+}
+
+// Idle cleanup window: an agent tab with no CDP command for this long is
+// treated as "task finished" — released (debugger detached) and closed.
+const IDLE_CLOSE_MS = 3 * 60 * 1000
+
+// Release an agent tab: detach (clears the debugger banner / relay mode), then
+// close it — unless the user is actively viewing it, in which case keep it open.
+async function reapAgentTab(tabId, reason) {
+  agentTabs.delete(tabId)
+  await detachTab(tabId, reason)
+  try {
+    const info = await chrome.tabs.get(tabId)
+    if (info.active) return // user is looking at it — detach only, keep the tab
+    const allTabs = await chrome.tabs.query({})
+    if (!isLastRemainingTab(allTabs, tabId)) await chrome.tabs.remove(tabId)
+  } catch {
+    // Tab already gone.
+  }
+}
+
+// Manual "stop & clean up": detach every attached tab; close the agent-created
+// ones. Tabs the user attached themselves are detached but never closed.
+async function releaseAllTabs() {
+  let detached = 0
+  let closed = 0
+  for (const tabId of [...tabs.keys()]) {
+    const wasAgent = agentTabs.delete(tabId)
+    await detachTab(tabId, 'manual-release')
+    detached++
+    if (wasAgent) {
+      try {
+        const allTabs = await chrome.tabs.query({})
+        if (!isLastRemainingTab(allTabs, tabId)) {
+          await chrome.tabs.remove(tabId)
+          closed++
+        }
+      } catch {
+        // Tab already gone.
+      }
+    }
+  }
+  refreshIndicator()
+  return { detached, closed }
+}
+
+// Release a single tab (popup per-tab control): detach, and close it too if the
+// agent owns it.
+async function releaseTab(tabId) {
+  const wasAgent = agentTabs.delete(tabId)
+  await detachTab(tabId, 'manual-release')
+  if (wasAgent) {
+    try {
+      const allTabs = await chrome.tabs.query({})
+      if (!isLastRemainingTab(allTabs, tabId)) await chrome.tabs.remove(tabId)
+    } catch {
+      // Tab already gone.
+    }
+  }
+  refreshIndicator()
 }
 
 async function connectOrToggleForActiveTab() {
@@ -857,6 +936,10 @@ async function handleForwardCdpCommand(msg) {
     })()
 
   if (!tabId) throw new Error(`No attached tab for method ${method}`)
+
+  // Stamp activity so the idle reaper and the spinner know this tab is in use.
+  const activeEntry = tabs.get(tabId)
+  if (activeEntry) activeEntry.lastActivityAt = Date.now()
 
   /** @type {chrome.debugger.DebuggerSession} */
   const debuggee = { tabId }
@@ -1150,6 +1233,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   }
 
+  // Idle reaper: an agent tab with no CDP command for IDLE_CLOSE_MS is treated
+  // as a finished task — release the debugger (clears the banner / relay mode)
+  // and close it (unless the user is viewing it). Stops agent tabs piling up.
+  const idleNow = Date.now()
+  for (const [tabId, tab] of [...tabs.entries()]) {
+    if (tab.state !== 'connected' || !agentTabs.has(tabId)) continue
+    if (!tab.lastActivityAt || idleNow - tab.lastActivityAt <= IDLE_CLOSE_MS) continue
+    await reapAgentTab(tabId, 'idle-timeout')
+  }
+
   // If relay is down and no reconnect is in progress, trigger one.
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
     if (!relayConnectPromise && !reconnectTimer) {
@@ -1203,12 +1296,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false
   }
   if (msg?.type === 'getTabList') {
-    const out = []
-    for (const [tabId, t] of tabs.entries()) {
-      out.push({ tabId, state: t.state, targetId: t.targetId || '', isAgent: agentTabs.has(tabId) })
-    }
-    sendResponse({ tabs: out })
-    return false
+    Promise.all(
+      [...tabs.keys()].map(async (tabId) => {
+        const t = tabs.get(tabId)
+        let title = ''
+        try {
+          const info = await chrome.tabs.get(tabId)
+          title = info.title || info.url || ''
+        } catch {
+          // tab gone
+        }
+        return { tabId, state: t?.state, isAgent: agentTabs.has(tabId), title }
+      }),
+    ).then((list) => {
+      try { sendResponse({ tabs: list }) } catch { /* channel closed */ }
+    })
+    return true
   }
   if (msg?.type === 'getLogs') {
     sendResponse({ logs: getLogBuffer(typeof msg.limit === 'number' ? msg.limit : 100) })
@@ -1233,6 +1336,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })
       .catch((e) => {
         scheduleReconnect()
+        try { sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }) } catch { /* channel closed */ }
+      })
+    return true
+  }
+  if (msg?.type === 'releaseAll') {
+    releaseAllTabs()
+      .then((r) => {
+        try { sendResponse({ ok: true, ...r }) } catch { /* channel closed */ }
+      })
+      .catch((e) => {
+        try { sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }) } catch { /* channel closed */ }
+      })
+    return true
+  }
+  if (msg?.type === 'releaseTab' && typeof msg.tabId === 'number') {
+    releaseTab(msg.tabId)
+      .then(() => {
+        try { sendResponse({ ok: true }) } catch { /* channel closed */ }
+      })
+      .catch((e) => {
         try { sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }) } catch { /* channel closed */ }
       })
     return true

@@ -1,5 +1,6 @@
-// Popup UI: live relay status, tab counts, recent traffic, and manual controls.
-// All state lives in the service worker; the popup is a thin view that polls it.
+// Popup UI: live relay status, attached tabs, recent traffic, and controls.
+// All state lives in the service worker; the popup is a thin view that polls it
+// and sends control messages (stop & clean up, per-tab release, reconnect).
 
 const byId = (id) => document.getElementById(id)
 
@@ -8,6 +9,14 @@ function fmtTime(ts) {
     return new Date(ts).toLocaleTimeString()
   } catch {
     return ''
+  }
+}
+
+async function send(type, extra) {
+  try {
+    return await chrome.runtime.sendMessage({ type, ...(extra || {}) })
+  } catch {
+    return null
   }
 }
 
@@ -44,6 +53,39 @@ function setStatus(state) {
   byId('stat-agent').textContent = String(state.agentTabs ?? 0)
 }
 
+function renderTabs(list) {
+  const ul = byId('tabs')
+  ul.textContent = ''
+  if (!list.length) {
+    const li = document.createElement('li')
+    li.className = 'empty'
+    li.textContent = 'No attached tabs'
+    ul.appendChild(li)
+    return
+  }
+  for (const t of list) {
+    const li = document.createElement('li')
+    const tag = document.createElement('span')
+    tag.className = 'tag'
+    tag.dataset.agent = String(Boolean(t.isAgent))
+    tag.textContent = t.isAgent ? 'agent' : 'user'
+    const ti = document.createElement('span')
+    ti.className = 'ti'
+    ti.textContent = t.title || `tab ${t.tabId}`
+    const x = document.createElement('button')
+    x.className = 'x'
+    x.textContent = '✕'
+    x.title = t.isAgent ? 'Detach & close' : 'Detach'
+    x.addEventListener('click', async () => {
+      x.disabled = true
+      await send('releaseTab', { tabId: t.tabId })
+      setTimeout(refresh, 300)
+    })
+    li.append(tag, ti, x)
+    ul.appendChild(li)
+  }
+}
+
 function renderLogs(logs) {
   const ul = byId('logs')
   ul.textContent = ''
@@ -54,7 +96,6 @@ function renderLogs(logs) {
     ul.appendChild(li)
     return
   }
-  // Newest first.
   for (const e of logs.slice().reverse()) {
     const li = document.createElement('li')
     const dir = document.createElement('span')
@@ -72,28 +113,33 @@ function renderLogs(logs) {
 }
 
 async function refresh() {
-  try {
-    const status = await chrome.runtime.sendMessage({ type: 'getRelayStatus' })
-    if (status) setStatus(status)
-  } catch {
-    // Service worker may be briefly asleep; next tick retries.
-  }
-  try {
-    const res = await chrome.runtime.sendMessage({ type: 'getLogs', limit: 40 })
-    renderLogs((res && res.logs) || [])
-  } catch {
-    // ignore
-  }
+  const status = await send('getRelayStatus')
+  if (status) setStatus(status)
+  const tabsRes = await send('getTabList')
+  renderTabs((tabsRes && tabsRes.tabs) || [])
+  const logsRes = await send('getLogs', { limit: 30 })
+  renderLogs((logsRes && logsRes.logs) || [])
 }
+
+byId('stop').addEventListener('click', async () => {
+  const btn = byId('stop')
+  btn.disabled = true
+  byId('hint').textContent = 'cleaning…'
+  const r = await send('releaseAll')
+  byId('hint').textContent = r && r.ok ? `detached ${r.detached}, closed ${r.closed}` : ''
+  setTimeout(() => {
+    btn.disabled = false
+    void refresh()
+    setTimeout(() => {
+      byId('hint').textContent = ''
+    }, 2500)
+  }, 500)
+})
 
 byId('reconnect').addEventListener('click', async () => {
   const btn = byId('reconnect')
   btn.disabled = true
-  try {
-    await chrome.runtime.sendMessage({ type: 'reconnectNow' })
-  } catch {
-    // ignore
-  }
+  await send('reconnectNow')
   setTimeout(() => {
     btn.disabled = false
     void refresh()
@@ -101,11 +147,7 @@ byId('reconnect').addEventListener('click', async () => {
 })
 
 byId('attach').addEventListener('click', async () => {
-  try {
-    await chrome.runtime.sendMessage({ type: 'toggleActiveTab' })
-  } catch {
-    // ignore
-  }
+  await send('toggleActiveTab')
   setTimeout(refresh, 400)
 })
 

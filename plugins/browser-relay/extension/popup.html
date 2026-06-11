@@ -99,7 +99,7 @@
       .actions {
         display: flex;
         gap: 8px;
-        margin-bottom: 12px;
+        margin-bottom: 8px;
       }
       button {
         flex: 1;
@@ -124,22 +124,57 @@
         opacity: 0.5;
         cursor: default;
       }
-      .logs-title {
+      .section-title {
         font-size: 11px;
         color: var(--muted);
-        margin-bottom: 4px;
+        margin: 12px 0 4px 0;
       }
-      ul.logs {
+      ul.list {
         list-style: none;
         margin: 0;
         padding: 6px;
-        max-height: 150px;
+        max-height: 132px;
         overflow-y: auto;
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: 10px;
-        font-family: ui-monospace, Menlo, monospace;
         font-size: 11px;
+      }
+      ul.tabs li {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        padding: 3px 2px;
+      }
+      ul.tabs .tag {
+        font-size: 9px;
+        font-weight: 700;
+        padding: 1px 5px;
+        border-radius: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        background: color-mix(in oklab, canvasText 12%, transparent);
+        color: var(--muted);
+      }
+      ul.tabs .tag[data-agent='true'] {
+        background: color-mix(in oklab, #2563eb 22%, transparent);
+        color: color-mix(in oklab, #2563eb 80%, canvasText);
+      }
+      ul.tabs .ti {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      ul.tabs .x {
+        flex: 0 0 auto;
+        width: 22px;
+        padding: 2px 0;
+        font-size: 11px;
+        border-radius: 6px;
+      }
+      ul.logs {
+        font-family: ui-monospace, Menlo, monospace;
       }
       ul.logs li {
         display: flex;
@@ -161,9 +196,10 @@
         color: var(--muted);
         font-size: 10px;
       }
-      ul.logs .empty {
+      ul.list .empty {
         color: var(--muted);
         justify-content: center;
+        text-align: center;
       }
     </style>
   </head>
@@ -183,13 +219,19 @@
       </div>
 
       <div class="actions">
-        <button class="primary" id="reconnect" type="button">Reconnect</button>
-        <button id="attach" type="button">Attach tab</button>
+        <button class="primary" id="stop" type="button">🧹 Stop &amp; clean up</button>
+        <button id="reconnect" type="button">Reconnect</button>
+      </div>
+      <div class="actions">
+        <button id="attach" type="button">Attach current tab</button>
         <button id="options" type="button">Settings</button>
       </div>
 
-      <div class="logs-title">Recent relay activity</div>
-      <ul class="logs" id="logs"></ul>
+      <div class="section-title">Attached tabs <span id="hint" style="opacity:.7"></span></div>
+      <ul class="list tabs" id="tabs"></ul>
+
+      <div class="section-title">Recent relay activity</div>
+      <ul class="list logs" id="logs"></ul>
     </div>
 
     <script src="popup.js"></script>
