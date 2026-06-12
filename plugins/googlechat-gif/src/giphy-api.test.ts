@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseIndex, pickRendition, searchGif, type GiphyImages } from "./giphy-api.js";
+import { chooseIndex, downloadGif, pickRendition, searchGif, type GiphyImages } from "./giphy-api.js";
 
 const images = (over: Partial<GiphyImages> = {}): GiphyImages => ({
   downsized_medium: { url: "https://giphy/medium.gif", size: "1000" },
@@ -67,5 +67,36 @@ describe("searchGif", () => {
     const fetchImpl = (async () => jsonResponse({}, 429)) as unknown as typeof fetch;
     const out = await searchGif({ ...base, fetchImpl });
     expect(out.kind).toBe("error");
+    if (out.kind === "error") expect(out.message).toContain("429");
+  });
+});
+
+describe("downloadGif", () => {
+  it("ok path: returns bytes and contentType for a 200 response", async () => {
+    const gifBytes = new Uint8Array([1, 2, 3, 4]);
+    const fetchImpl = (async () =>
+      new Response(gifBytes, { status: 200, headers: { "content-type": "image/gif" } })) as unknown as typeof fetch;
+    const result = await downloadGif("https://giphy/test.gif", 1_000_000, fetchImpl);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(Buffer.isBuffer(result.bytes)).toBe(true);
+      expect(result.bytes.byteLength).toBe(4);
+      expect(result.contentType).toBe("image/gif");
+    }
+  });
+
+  it("over-limit: returns error when body exceeds maxBytes", async () => {
+    const gifBytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const fetchImpl = (async () =>
+      new Response(gifBytes, { status: 200, headers: { "content-type": "image/gif" } })) as unknown as typeof fetch;
+    const result = await downloadGif("https://giphy/big.gif", 3, fetchImpl);
+    expect(result.kind).toBe("error");
+  });
+
+  it("non-200: returns error for a 404 response", async () => {
+    const fetchImpl = (async () =>
+      new Response(null, { status: 404 })) as unknown as typeof fetch;
+    const result = await downloadGif("https://giphy/missing.gif", 1_000_000, fetchImpl);
+    expect(result.kind).toBe("error");
   });
 });

@@ -17,8 +17,9 @@ export type GifSearchOutcome =
   | { kind: "none" }
   | { kind: "error"; message: string };
 
-// Prefer a small-but-decent rendition; fall through to larger ones, skipping any
-// whose declared byte size exceeds the cap so we never queue an over-limit upload.
+// Prefer a small-but-decent rendition; fall through to the next candidate,
+// skipping any whose declared byte size exceeds the cap so we never queue an
+// over-limit upload.
 const RENDITION_ORDER = ["downsized_medium", "fixed_height", "original"] as const;
 
 export function pickRendition(images: GiphyImages | undefined, maxBytes: number): string | undefined {
@@ -88,7 +89,9 @@ export async function searchGif(params: {
     return { kind: "none" };
   }
   const idx = chooseIndex(usable.length, params.selector);
-  // idx is always in [0, usable.length) here because usable.length > 0 (checked above).
+  // Cast is safe: (a) idx is in [0, usable.length) because usable.length > 0 (checked
+  // above); (b) TypeScript does not propagate the .filter type-predicate into the mapped
+  // element type, so `url` is still typed `string | undefined` without the cast.
   const gif = usable[idx] as GifPick;
   return { kind: "ok", gif };
 }
