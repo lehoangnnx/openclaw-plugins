@@ -17,8 +17,11 @@ repeated `snapshot` on a relay tab; use `browser_fast`.**
 
 ## The loop
 
-1. **Go to the page** — `browser_fast { action: "navigate", url }` (current tab)
-   or `{ action: "open_tab", url }` (new tab).
+1. **Go to the page** — `browser_fast { action: "navigate", url }`. This drives
+   the attached tab if there is one, and **opens a new tab automatically if none
+   is attached** — so you can start a browsing task on your own without asking
+   the user to attach anything. Use `{ action: "open_tab", url }` to force a new
+   tab. (You do **not** need a manual attach to begin: just `navigate`.)
 2. **Observe** — `browser_fast { action: "observe" }` returns numbered
    interactive elements (`[1] button "Add to cart"`, …). Add
    `{ screenshot: true }` to also get a viewport image.
@@ -50,6 +53,9 @@ navigate/observe/click/type/read on a relay tab, always use `browser_fast`.
 
 ## Prerequisites
 
-The tab must be attached via the Browser Relay extension (toolbar badge **ON**).
-If `browser_fast` reports "extension not connected" or "no attached tab", tell
-the user to open/attach the extension on the page they want controlled.
+The relay extension must be connected (toolbar badge **ON**). To start an
+autonomous task, just call `navigate` — it opens a tab for you. You only need to
+ask the user to attach a tab manually (toolbar icon) when they want you to act on
+a page they **already have open** (e.g. behind a login they completed in that
+exact tab). If `browser_fast` reports "extension not connected", the relay is
+down — ask the user to open/enable the extension.

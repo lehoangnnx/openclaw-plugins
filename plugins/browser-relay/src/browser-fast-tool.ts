@@ -166,6 +166,31 @@ export function createBrowserFastTool(deps: {
         };
         return textResult(`Opened tab ${res?.targetId ?? ""} at ${p.url}`, { targetId: res?.targetId });
       }
+      // navigate bootstraps autonomy: drive the attached tab if there is one,
+      // else open a fresh tab in the user's real browser (Target.createTarget
+      // auto-attaches) — so the agent never needs a manual attach to start a task.
+      if (p.action === "navigate") {
+        if (!p.url) return textResult("navigate requires `url`.");
+        const navTarget = resolveTarget(targets, p.targetId);
+        if (navTarget) {
+          const res = (await server.sendExtensionCommand(
+            "Extension.navigate",
+            { url: p.url },
+            { sessionId: navTarget.sessionId, targetId: navTarget.targetId },
+          )) as { url?: string; title?: string };
+          return textResult(`Navigated to ${res?.url ?? p.url}${res?.title ? ` — ${res.title}` : ""}`, {
+            targetId: navTarget.targetId,
+            url: res?.url,
+          });
+        }
+        const res = (await server.sendExtensionCommand("Target.createTarget", { url: p.url })) as {
+          targetId?: string;
+        };
+        return textResult(`No tab was attached — opened a new tab ${res?.targetId ?? ""} at ${p.url}.`, {
+          targetId: res?.targetId,
+          opened: true,
+        });
+      }
       if (p.action === "activate_tab" || p.action === "close_tab") {
         const targetId = p.targetId ?? targets[0]?.targetId;
         if (!targetId) return textResult(`${p.action} requires a targetId (none attached).`);
@@ -187,13 +212,6 @@ export function createBrowserFastTool(deps: {
 
       try {
         switch (p.action) {
-          case "navigate": {
-            if (!p.url) return textResult("navigate requires `url`.");
-            const res = (await send("Extension.navigate", { url: p.url })) as { url?: string; title?: string };
-            return textResult(`Navigated to ${res?.url ?? p.url}${res?.title ? ` — ${res.title}` : ""}`, {
-              url: res?.url,
-            });
-          }
           case "observe": {
             const marks = await send("Extension.markElements", { maxElements: p.maxElements ?? 200 });
             const items: ContentItem[] = [{ type: "text", text: renderObservation(marks) }];
