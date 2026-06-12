@@ -89,4 +89,14 @@ describe("uploadAndSendGif", () => {
     expect(result.kind).toBe("error");
     expect((result as { kind: "error"; message: string }).message).toContain("attachmentUploadToken");
   });
+
+  it("upload succeeds but send POST returns non-ok: returns an error", async () => {
+    const responses = [
+      jsonResponse({ attachmentDataRef: { attachmentUploadToken: "tok-send-fail" } }),
+      jsonResponse({ error: "Internal Server Error" }, 500),
+    ];
+    const fetchImpl = async () => responses.shift()!;
+    const result = await uploadAndSendGif({ ...baseParams, fetchImpl });
+    expect(result.kind).toBe("error");
+  });
 });

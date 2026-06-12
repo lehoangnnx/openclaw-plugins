@@ -91,7 +91,8 @@ export default definePluginEntry({
           // Vary the pick across calls without Date/Math.random in the search path:
           // a cheap per-call counter keeps repeated identical queries from always
           // returning result #0.
-          const selector = (callCounter += 1);
+          callCounter = (callCounter + 1) % 100000;
+          const selector = callCounter;
 
           const search = await searchGif({ apiKey, query, rating, maxBytes, selector });
           if (search.kind === "error") {
