@@ -1,0 +1,32 @@
+{
+  "id": "googlechat-gif",
+  "name": "Google Chat GIF",
+  "description": "Search Giphy and post an animated GIF into an allowlisted Google Chat space.",
+  "contracts": { "tools": ["send_gif"] },
+  "toolMetadata": { "send_gif": { "optional": true } },
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "giphyApiKey": {
+        "type": "string",
+        "description": "Giphy API key. Falls back to env GIPHY_API_KEY. A Giphy beta key is sufficient for a personal bot."
+      },
+      "rating": {
+        "type": "string",
+        "enum": ["g", "pg", "pg-13", "r"],
+        "description": "Giphy content rating filter. Defaults to 'g' (safe for a work space)."
+      },
+      "serviceAccountFile": {
+        "type": "string",
+        "description": "Path to the Google service account JSON key (chat.bot scope). Falls back to env GOOGLE_CHAT_SERVICE_ACCOUNT_FILE (path) or inline GOOGLE_CHAT_SERVICE_ACCOUNT (JSON) — the same credentials the googlechat channel uses."
+      },
+      "allowedSpaces": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Explicit allowlist of spaces the plugin may post GIFs to (e.g. 'spaces/AAQAxxxx'). When SET it wins (empty array = deny all). When UNSET it is INHERITED from the googlechat channel's enabled groups while groupPolicy is 'allowlist'."
+      }
+    }
+  }
+}
