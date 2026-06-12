@@ -34,7 +34,7 @@ function credentialKey(source: ServiceAccountSource): string {
 
 async function getAppAccessToken(configFile?: string): Promise<string> {
   const source = resolveServiceAccount(configFile);
-  const key = credentialKey(source);
+  const key = `${SCOPE_BOT}|${credentialKey(source)}`;
   let auth = appAuthCache.get(key);
   if (!auth) {
     auth = new GoogleAuth({
@@ -107,12 +107,16 @@ export async function uploadAndSendGif(params: {
   contentType: string;
   serviceAccountFile?: string;
   fetchImpl?: typeof fetch;
+  // getToken exists only to make the upload/send branches testable without real Google auth.
+  // Production always uses the default getAppAccessToken.
+  getToken?: (serviceAccountFile?: string) => Promise<string>;
 }): Promise<SendGifResult> {
   const doFetch = params.fetchImpl ?? fetch;
+  const mintToken = params.getToken ?? getAppAccessToken;
   const space = normalizeSpace(params.space);
   let token: string;
   try {
-    token = await getAppAccessToken(params.serviceAccountFile);
+    token = await mintToken(params.serviceAccountFile);
   } catch (err) {
     return { kind: "error", message: (err as Error).message };
   }

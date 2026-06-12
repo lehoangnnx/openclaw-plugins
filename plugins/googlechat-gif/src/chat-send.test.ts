@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { buildMultipart, buildSendBody, formatChatApiError, normalizeSpace } from "./chat-send.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  __resetAuthCache,
+  buildMultipart,
+  buildSendBody,
+  formatChatApiError,
+  normalizeSpace,
+  uploadAndSendGif,
+} from "./chat-send.js";
 
 describe("normalizeSpace", () => {
   it("adds the spaces/ prefix when missing", () => {
@@ -35,5 +42,51 @@ describe("formatChatApiError", () => {
   });
   it("passes other statuses through", () => {
     expect(formatChatApiError(500, "boom")).toContain("HTTP 500");
+  });
+});
+
+describe("uploadAndSendGif", () => {
+  afterEach(() => {
+    __resetAuthCache();
+  });
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const baseParams = {
+    space: "spaces/A",
+    filename: "x.gif",
+    bytes: Buffer.from("GIF89a"),
+    contentType: "image/gif",
+    getToken: async () => "fake-token",
+  };
+
+  it("happy path: uploads then sends and returns the message name", async () => {
+    const responses = [
+      jsonResponse({ attachmentDataRef: { attachmentUploadToken: "tok-9" } }),
+      jsonResponse({ name: "spaces/A/messages/m1" }),
+    ];
+    const fetchImpl = async () => responses.shift()!;
+    const result = await uploadAndSendGif({ ...baseParams, fetchImpl });
+    expect(result).toEqual({ kind: "ok", messageName: "spaces/A/messages/m1" });
+  });
+
+  it("upload non-ok: returns an error mentioning 'not a member of the space'", async () => {
+    const fetchImpl = async () => jsonResponse({}, 403);
+    const result = await uploadAndSendGif({ ...baseParams, fetchImpl });
+    expect(result.kind).toBe("error");
+    expect((result as { kind: "error"; message: string }).message).toContain("not a member of the space");
+  });
+
+  it("missing token: returns an error mentioning attachmentUploadToken", async () => {
+    // Upload returns 200 but no attachmentDataRef
+    const fetchImpl = async () => jsonResponse({});
+    const result = await uploadAndSendGif({ ...baseParams, fetchImpl });
+    expect(result.kind).toBe("error");
+    expect((result as { kind: "error"; message: string }).message).toContain("attachmentUploadToken");
   });
 });
