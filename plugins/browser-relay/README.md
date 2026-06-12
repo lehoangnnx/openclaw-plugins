@@ -16,14 +16,29 @@ Your Chrome (real profile) ──chrome.debugger/CDP──┐
    OpenClaw `browser` tool ──connectOverCDP──┘  (cdpUrl profile → http://127.0.0.1:18792)
 ```
 
-The plugin adds **no new agent tool**. It runs the relay; you point the existing `browser` tool at it with a `cdpUrl` profile. Agents then use `browser` with `profile="<your-relay>"`.
+The plugin adds a coarse-grained **`browser_fast`** agent tool (Accio-style): each
+action — `navigate / open_tab / observe / read / click / type / scroll / press_key /
+hover / find / screenshot / done / …` — is **one relay round-trip** (a single injected
+script), so relay-driven browsing stays fast even over a remote link. A bundled
+`browser-fast` skill steers the agent to use it. The standard `browser` tool still
+works against the relay via a `cdpUrl` profile, as a fallback for download/pdf/raw
+`evaluate`.
+
+**Deploying to a gateway? See [DEPLOY.md](./DEPLOY.md)** for the full recipe
+(install + gateway config incl. the `tools.alsoAllow` step + per-user extension).
 
 ## Status
 
-- **Phase 0 (current): local, single-tenant.** Recovered relay + extension, repackaged as a plugin, loopback only.
-- Phase 1: remote transport (extension dials your gateway over `wss://` through Cloudflare; `/cdp` stays loopback).
-- Phase 2: multi-tenant (per-user pairing tokens in SQLite; relay rooms; isolation).
-- Phase 3: SaaS hardening (per-tenant `evaluate` gate, rate limits, audit, security review).
+- **Phase 0 — done:** recovered relay + extension, repackaged as a plugin (loopback).
+- **Phase 1 — done:** remote transport (extension dials your gateway over `wss://`
+  via a reverse proxy; `/cdp` stays loopback) + full `browser_fast` agent tool +
+  `browser-fast` skill + autonomous tab open/close (`done`).
+- Phase 2 (planned): multi-tenant (per-user pairing tokens in SQLite; relay rooms; isolation).
+- Phase 3 (planned): SaaS hardening (per-tenant `evaluate` gate, rate limits, audit, security review).
+
+The quick **Setup** below is for a single local gateway; for any real deployment
+(local or remote, any gateway) follow **[DEPLOY.md](./DEPLOY.md)** — it covers the
+mandatory `tools.alsoAllow += "browser_fast"` step and the remote reverse proxy.
 
 ## Setup (Phase 0, local)
 

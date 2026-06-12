@@ -10,7 +10,7 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["debugger", "tabs", "tabGroups", "activeTab", "scripting", "storage", "alarms", "webNavigation", "notifications"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "https://openclaw-lehoang.fly.dev/*", "<all_urls>"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "OpenClaw Browser Relay",
