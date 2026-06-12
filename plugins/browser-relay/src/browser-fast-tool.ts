@@ -35,6 +35,7 @@ const FAST_ACTIONS = [
   "list_tabs",
   "activate_tab",
   "close_tab",
+  "done",
 ] as const;
 
 const CLICK_TYPES = ["single_left", "double_left", "right"] as const;
@@ -43,7 +44,7 @@ const SCROLL_DIRECTIONS = ["down", "up", "left", "right", "top", "bottom"] as co
 const BrowserFastSchema = Type.Object({
   action: stringEnum([...FAST_ACTIONS], {
     description:
-      "navigate (go to url) | open_tab (new tab at url) | observe (numbered interactive elements, optional screenshot) | read (page text as Markdown) | click | type | scroll | press_key | hover | find (in-page keyword) | screenshot | viewport (size/scroll) | zoom | list_tabs | activate_tab | close_tab.",
+      "navigate (go to url) | open_tab (new tab at url) | observe (numbered interactive elements, optional screenshot) | read (page text as Markdown) | click | type | scroll | press_key | hover | find (in-page keyword) | screenshot | viewport (size/scroll) | zoom | list_tabs | activate_tab | close_tab | done (close every tab you opened — call when finished).",
   }),
   url: Type.Optional(Type.String({ description: "Target URL for navigate/open_tab." })),
   index: Type.Optional(
@@ -157,6 +158,16 @@ export function createBrowserFastTool(deps: {
         const lines = targets.map((t, i) => `${i + 1}. ${t.targetId} — ${t.title || ""} (${t.url || ""})`);
         return textResult(targets.length ? `Attached tabs:\n${lines.join("\n")}` : "No attached tabs.", {
           count: targets.length,
+        });
+      }
+      if (p.action === "done") {
+        // Close every tab the agent opened, even if detached/orphaned — so a
+        // finished task never leaves tabs behind.
+        const res = (await server.sendExtensionCommand("Extension.closeAllAgentTabs")) as {
+          closed?: number;
+        };
+        return textResult(`Done — closed ${res?.closed ?? 0} tab(s) the agent opened.`, {
+          closed: res?.closed ?? 0,
         });
       }
       if (p.action === "open_tab") {

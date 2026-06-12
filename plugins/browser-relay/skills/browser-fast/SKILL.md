@@ -30,6 +30,10 @@ repeated `snapshot` on a relay tab; use `browser_fast`.**
 4. **Read text** — `browser_fast { action: "read" }` returns the page as clean
    Markdown. Use this to extract article/post/review text in **one call**
    instead of writing extraction scripts.
+5. **Finish** — when the task is done, call `browser_fast { action: "done" }` to
+   close every tab you opened. **Always do this at the end** of a browsing task
+   so you don't leave tabs open in the user's browser. (Tabs the user attached
+   themselves are never closed.)
 
 ## Reading a list (reviews, posts, search results)
 

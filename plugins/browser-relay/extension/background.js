@@ -49,6 +49,12 @@ const reattachPending = new Set()
 /** @type {Set<number>} */
 const agentTabs = new Set()
 
+// Last-activity timestamp per agent tab, kept even after the debugger detaches
+// (a navigation can orphan a tab out of `tabs`). Lets the idle reaper and the
+// close-all path still find and close agent tabs the agent opened.
+/** @type {Map<number, number>} */
+const agentTabActivity = new Map()
+
 // Fixed-size ring buffer of recent relay traffic, surfaced in the popup for
 // diagnostics without opening the service-worker devtools.
 const LOG_CAP = 200
@@ -783,6 +789,7 @@ const IDLE_CLOSE_MS = 3 * 60 * 1000
 // close it — unless the user is actively viewing it, in which case keep it open.
 async function reapAgentTab(tabId, reason) {
   agentTabs.delete(tabId)
+  agentTabActivity.delete(tabId)
   await detachTab(tabId, reason)
   try {
     const info = await chrome.tabs.get(tabId)
@@ -817,6 +824,35 @@ async function releaseAllTabs() {
   }
   refreshIndicator()
   return { detached, closed }
+}
+
+// Close EVERY tab the agent opened, regardless of attach/connected state. Used
+// by browser_fast "done" so a finished task never leaves tabs open even when an
+// individual close_tab raced a navigation detach (the tab is then orphaned out
+// of `tabs`/connectedTargets, so target-based close can't find it). Iterates the
+// durable `agentTabs` set instead. Never closes the last remaining tab.
+async function closeAllAgentTabs() {
+  let closed = 0
+  for (const tabId of [...agentTabs]) {
+    agentTabs.delete(tabId)
+    agentTabActivity.delete(tabId)
+    if (tabs.has(tabId)) {
+      await detachTab(tabId, 'task-done')
+    } else {
+      try { await chrome.debugger.detach({ tabId }) } catch { /* already detached */ }
+    }
+    try {
+      const allTabs = await chrome.tabs.query({})
+      if (!isLastRemainingTab(allTabs, tabId)) {
+        await chrome.tabs.remove(tabId)
+        closed++
+      }
+    } catch {
+      // Tab already gone.
+    }
+  }
+  refreshIndicator()
+  return { success: true, closed }
 }
 
 // Release a single tab (popup per-tab control): detach, and close it too if the
@@ -906,6 +942,7 @@ async function handleForwardCdpCommand(msg) {
     // Track ownership before attach so close-gating and cleanup stay correct
     // even if a quick close races the attach below.
     agentTabs.add(tab.id)
+    agentTabActivity.set(tab.id, Date.now())
     void addToAgentGroup(tab.id)
     await new Promise((r) => setTimeout(r, 100))
     try {
@@ -922,6 +959,12 @@ async function handleForwardCdpCommand(msg) {
       }
       throw err
     }
+  }
+
+  // Close-all runs before the attached-tab gate: it targets the agent-owned set
+  // directly, so it works even when every agent tab is currently detached.
+  if (method === 'Extension.closeAllAgentTabs') {
+    return await closeAllAgentTabs()
   }
 
   const bySession = sessionId ? getTabBySessionId(sessionId) : null
@@ -941,6 +984,7 @@ async function handleForwardCdpCommand(msg) {
   // Stamp activity so the idle reaper and the spinner know this tab is in use.
   const activeEntry = tabs.get(tabId)
   if (activeEntry) activeEntry.lastActivityAt = Date.now()
+  if (agentTabs.has(tabId)) agentTabActivity.set(tabId, Date.now())
 
   // Coarse-grained fast path: Extension.* run as one injected script (or one
   // CDP screenshot) and return structured data in a single round-trip, instead
@@ -1149,6 +1193,7 @@ async function onDebuggerDetach(source, reason) {
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
   reattachPending.delete(tabId)
+  agentTabActivity.delete(tabId)
   const wasAgent = agentTabs.delete(tabId)
   if (!tabs.has(tabId)) {
     if (wasAgent) refreshIndicator()
@@ -1249,6 +1294,30 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (tab.state !== 'connected' || !agentTabs.has(tabId)) continue
     if (!tab.lastActivityAt || idleNow - tab.lastActivityAt <= IDLE_CLOSE_MS) continue
     await reapAgentTab(tabId, 'idle-timeout')
+  }
+
+  // Orphan reaper: an agent tab can fall out of `tabs`/connectedTargets after a
+  // navigation detach, so the loop above misses it and it stays open forever.
+  // Close idle agent tabs by their durable agentTabs/agentTabActivity record.
+  for (const tabId of [...agentTabs]) {
+    if (tabs.has(tabId) || reattachPending.has(tabId)) continue
+    const last = agentTabActivity.get(tabId)
+    if (last && idleNow - last <= IDLE_CLOSE_MS) continue
+    try {
+      await chrome.tabs.get(tabId)
+    } catch {
+      agentTabs.delete(tabId)
+      agentTabActivity.delete(tabId)
+      continue
+    }
+    agentTabs.delete(tabId)
+    agentTabActivity.delete(tabId)
+    try {
+      const allTabs = await chrome.tabs.query({})
+      if (!isLastRemainingTab(allTabs, tabId)) await chrome.tabs.remove(tabId)
+    } catch {
+      // Tab already gone.
+    }
   }
 
   // If relay is down and no reconnect is in progress, trigger one.
